@@ -14,6 +14,9 @@ frontend/.verify/*.png
 # Local Postgres data directory (embedded-postgres, machines without Docker)
 .pgdata/
 
+# Runtime object storage (FILES_DIR default) and CLI logs — generated, never source
+backend/var/
+
 # Env files — .env.example is committed, real env files are not
 .env
 .env.*
