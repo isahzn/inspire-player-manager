@@ -181,6 +181,34 @@ export const settingsSection: Section = section("3.2 Settings", [
     milestone: "m6",
   }),
 
+  /**
+   * The read side of SET-03, and the reason it exists: the contract promises that a logo's URL
+   * is "public through `/auth/me` and PDFs", and a private object store cannot mint a public URL
+   * (OPEN-016 has no bucket). So the URL names this route, which serves the academy's own logo
+   * with **no session** — it takes no parameter, so it can only ever answer with the logo the
+   * owner uploaded and cannot be pointed at anything else in private storage.
+   */
+  endpoint({
+    id: "PUB-02",
+    method: "get",
+    path: "/public/academy/logo",
+    auth: "public",
+    summary: "Fetch the academy logo",
+    description:
+      "The one public brand asset. Serves the current logo as uploaded (PNG/JPEG/SVG) with a 5-minute cache, so a settings screen can render it straight in an `<img>`; `404` while no logo has been uploaded, and the UI falls back to the name as a text wordmark. No parameter is accepted: the response is always the academy's own logo.",
+    tags: ["Public"],
+    responses: [
+      {
+        status: 200,
+        description: "The logo bytes",
+        contentType: "image/png",
+        schema: z.string().openapi({ format: "binary" }),
+      },
+      { status: 404, description: "NOT_FOUND — no logo has been uploaded." },
+    ],
+    milestone: "m6",
+  }),
+
   // --- SET-04 payment methods ---------------------------------------------
   endpoint({
     id: "SET-04",

@@ -1148,3 +1148,26 @@ export const ImportCommitResult = registry.register(
   "ImportCommitResult",
   z.object({ created: z.number().int(), skipped: z.number().int() }),
 );
+
+// ---------------------------------------------------------------------------
+// Type aliases for the primitives above.
+//
+// Each schema is also its own TypeScript type, so server code imports one name for both
+// (`Role` the zod enum for validation, `Role` the union for signatures). A value and a
+// type may share a name in TypeScript, which keeps the contract module the single place
+// either comes from.
+// ---------------------------------------------------------------------------
+export type Role = z.infer<typeof Role>;
+export type SessionStatusLabel = z.infer<typeof SessionStatusLabel>;
+export type AttendanceStatus = z.infer<typeof AttendanceStatus>;
+export type ConsentStatus = z.infer<typeof ConsentStatus>;
+export type ProofDocKind = z.infer<typeof ProofDocKind>;
+export type ProofVerificationStatus = z.infer<typeof ProofVerification>["status"];
+export type ReportName = z.infer<typeof ReportName>;
+export type User = z.infer<typeof User>;
+export type Me = z.infer<typeof Me>;
+export type Invoice = z.infer<typeof Invoice>;
+export type Payment = z.infer<typeof Payment>;
+export type MessageJob = z.infer<typeof MessageJob>;
+export type Session = z.infer<typeof Session>;
+export type CoachAttendance = z.infer<typeof CoachAttendance>;

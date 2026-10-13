@@ -523,9 +523,12 @@ export const billingPaymentsSection: Section = section("3.6 Billing, invoices, p
     permission: "payments:manage",
     summary: "Suggest allocations oldest-due-first",
     description:
-      "Read-only helper for the record-payment screen. CONTRACT GAP: the path carries a payment id while the suggestion is keyed by guardian and needs no existing payment, so the frontend calls it with the literal `new` when recording (recorded in the Step 5 handoff §4); `{id}` accepts that literal until Claude resolves the path.",
+      "Read-only helper for the record-payment screen. CONTRACT GAP: the path carries a payment id while the suggestion is keyed by guardian and needs no existing payment, so the frontend calls it with the literal `new` when recording (recorded in the Step 5 handoff §4); `{id}` is therefore a **plain string here, not a uuid** — a real id means the payment's own unallocated remainder is on offer, anything else (the literal `new`) means the guardian's credit. `{id}` is documented as open until Claude resolves the path.",
     tags: ["Billing"],
-    params: idParam,
+    // Deliberately not `idParam`: the documented `new` literal must reach the handler. The
+    // handler decides from the value, so a uuid cast here would turn the contract's own
+    // recorded gap into a 422.
+    params: z.object({ id: z.string().min(1) }),
     query: z.object({ guardianId: Id }),
     responses: [
       res.json(

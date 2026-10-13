@@ -4067,6 +4067,34 @@ paths:
           content:
             application/json:
               schema: *a1
+  /public/academy/logo:
+    get:
+      operationId: PUB-02
+      summary: Fetch the academy logo
+      description: "The one public brand asset. Serves the current logo as uploaded (PNG/JPEG/SVG) with a 5-minute cache, so a settings screen can render it straight in an `<img>`; `404` while no logo has been uploaded, and the UI falls back to the name as a text wordmark. No parameter is accepted: the response is always the academy's own logo."
+      tags:
+        - Public
+      security: []
+      x-ia-endpoint: PUB-02
+      x-ia-milestone: m6
+      responses:
+        "200":
+          description: The logo bytes
+          content:
+            image/png:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: NOT_FOUND — no logo has been uploaded.
+          content:
+            application/json:
+              schema: *a1
+        "500":
+          description: INTERNAL_ERROR — see API_CONTRACTS §1.1.
+          content:
+            application/json:
+              schema: *a1
   /settings/payment-methods:
     get:
       operationId: SET-04.list
@@ -10227,7 +10255,7 @@ paths:
     get:
       operationId: PAY-08
       summary: Suggest allocations oldest-due-first
-      description: "Read-only helper for the record-payment screen. CONTRACT GAP: the path carries a payment id while the suggestion is keyed by guardian and needs no existing payment, so the frontend calls it with the literal `new` when recording (recorded in the Step 5 handoff §4); `{id}` accepts that literal until Claude resolves the path."
+      description: "Read-only helper for the record-payment screen. CONTRACT GAP: the path carries a payment id while the suggestion is keyed by guardian and needs no existing payment, so the frontend calls it with the literal `new` when recording (recorded in the Step 5 handoff §4); `{id}` is therefore a **plain string here, not a uuid** — a real id means the payment's own unallocated remainder is on offer, anything else (the literal `new`) means the guardian's credit. `{id}` is documented as open until Claude resolves the path."
       tags:
         - Billing
       security:
@@ -10238,10 +10266,8 @@ paths:
       parameters:
         - schema:
             type: string
-            format: uuid
-            description: UUID (UUIDv7; sorts by creation time)
+            minLength: 1
           required: true
-          description: UUID (UUIDv7; sorts by creation time)
           name: id
           in: path
         - schema:
