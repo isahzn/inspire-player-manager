@@ -1,0 +1,276 @@
+/**
+ * API_CONTRACTS §3.3 — age groups, group fees, coach assignments.
+ * Rows: GRP-01..05, FEE-01..02, CCH-01..05. Owner milestone: M3.
+ */
+import { endpoint, section, res, z, type Section } from "../registry.js";
+import {
+  AgeGroup,
+  AgeGroupList,
+  AgeGroupSuggestion,
+  CoachAssignment,
+  CoachRow,
+  DateStr,
+  GroupFee,
+  GroupFeeList,
+  Id,
+  MyGroupsResponse,
+  Minor,
+  listOf,
+  pageOf,
+  pageQuery,
+  qParam,
+} from "../components.js";
+
+const idParams = z.object({ id: Id });
+
+export const groupsCoachesSection: Section = section("3.3 Age groups, fees, coaches", [
+  endpoint({
+    id: "GRP-01",
+    method: "get",
+    path: "/age-groups",
+    auth: "coach_scoped",
+    permission: "groups:read",
+    scope:
+      "Coach sees assigned groups only and never a fee field; owner sees all groups with currentFeeMinor",
+    summary: "List age groups",
+    tags: ["Groups"],
+    query: z.object({ includeArchived: z.coerce.boolean().optional() }),
+    responses: [res.json(200, AgeGroupList, "Age groups visible to the caller")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "GRP-02",
+    method: "post",
+    path: "/age-groups",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "Create an age group",
+    tags: ["Groups"],
+    mutating: true,
+    audit: "age_group.create",
+    body: z.strictObject({
+      name: z.string().min(1).max(120),
+      minAge: z.number().int().min(0).optional(),
+      maxAge: z.number().int().min(0).optional(),
+      sortOrder: z.number().int().optional(),
+    }),
+    responses: [res.json(201, AgeGroup, "Created age group")],
+    errors: ["VALIDATION_ERROR"],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "GRP-03",
+    operationId: "GRP-03.read",
+    method: "get",
+    path: "/age-groups/{id}",
+    auth: "coach_scoped",
+    permission: "groups:read",
+    scope: "Out-of-scope coach ⇒ 404 NOT_FOUND",
+    summary: "Read one age group",
+    tags: ["Groups"],
+    params: idParams,
+    responses: [res.json(200, AgeGroup, "The age group")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "GRP-03",
+    operationId: "GRP-03.update",
+    method: "patch",
+    path: "/age-groups/{id}",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "Update an age group",
+    tags: ["Groups"],
+    mutating: true,
+    audit: "age_group.update",
+    params: idParams,
+    body: z.strictObject({
+      name: z.string().min(1).max(120).optional(),
+      minAge: z.number().int().min(0).optional(),
+      maxAge: z.number().int().min(0).optional(),
+      sortOrder: z.number().int().optional(),
+    }),
+    responses: [res.json(200, AgeGroup, "Updated age group")],
+    errors: ["VALIDATION_ERROR"],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "GRP-04",
+    operationId: "GRP-04.archive",
+    method: "post",
+    path: "/age-groups/{id}/archive",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "Archive an age group",
+    description:
+      "Blocked while active players are currently assigned. Archiving hides the group from new assignments; history stays readable.",
+    tags: ["Groups"],
+    mutating: true,
+    audit: "age_group.archive",
+    params: idParams,
+    responses: [res.json(200, AgeGroup, "Archived age group")],
+    errors: ["AGE_GROUP_HAS_ACTIVE_PLAYERS"],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "GRP-04",
+    operationId: "GRP-04.unarchive",
+    method: "post",
+    path: "/age-groups/{id}/unarchive",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "Restore an archived age group",
+    tags: ["Groups"],
+    mutating: true,
+    audit: "age_group.unarchive",
+    params: idParams,
+    responses: [res.json(200, AgeGroup, "Restored age group")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "GRP-05",
+    method: "get",
+    path: "/age-groups/suggest",
+    auth: "owner",
+    permission: "players:manage",
+    scope: "Advisory only — the suggestion is never applied automatically (T-PLY-01)",
+    summary: "Suggest age groups for a date of birth",
+    description:
+      "Reference date comes from academy_settings.age_reference_rule (OPEN-003 safe default: jan_1_of_year).",
+    tags: ["Groups"],
+    query: z.object({ dateOfBirth: DateStr }),
+    responses: [res.json(200, AgeGroupSuggestion, "Age on the reference date plus suggestions")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "FEE-01",
+    method: "get",
+    path: "/age-groups/{id}/fees",
+    auth: "owner",
+    permission: "fees:manage",
+    scope: "Coaches never see fees (AUTH §4)",
+    summary: "List the fee history of an age group",
+    tags: ["Groups"],
+    params: idParams,
+    responses: [res.json(200, GroupFeeList, "Effective-dated fee rows, newest first")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "FEE-02",
+    method: "post",
+    path: "/age-groups/{id}/fees",
+    auth: "owner",
+    permission: "fees:manage",
+    summary: "Change the fee of an age group",
+    description:
+      "Closes the current row (effective_to = new effectiveFrom − 1 day) and inserts the new one in one transaction (T6). Issued invoices are never altered. effectiveFrom must be today or later unless the owner passes allowPast.",
+    tags: ["Groups"],
+    mutating: true,
+    idempotent: true,
+    audit: "group_fee.create",
+    params: idParams,
+    body: z
+      .strictObject({
+        amountMinor: Minor.refine((v) => v > 0, "must be greater than zero"),
+        effectiveFrom: DateStr,
+        allowPast: z
+          .boolean()
+          .optional()
+          .describe("Owner confirms a past effective date (default false ⇒ 422)"),
+      }),
+    responses: [res.json(201, GroupFee, "New fee row; the previous row was closed")],
+    errors: ["FEE_OVERLAP", "VALIDATION_ERROR"],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "CCH-01",
+    method: "get",
+    path: "/coaches",
+    auth: "owner",
+    permission: "users:manage",
+    summary: "List coach users with their current groups",
+    tags: ["Groups"],
+    query: z.object({ q: qParam }).extend(pageQuery.shape),
+    responses: [res.json(200, pageOf(CoachRow), "Coaches (users with role coach)")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "CCH-02",
+    method: "get",
+    path: "/coach-assignments",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "List coach group assignments",
+    tags: ["Groups"],
+    query: z.object({
+      coachUserId: Id.optional(),
+      ageGroupId: Id.optional(),
+      activeOn: DateStr.optional(),
+    }),
+    responses: [res.json(200, listOf(CoachAssignment), "Assignments matching the filters")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "CCH-03",
+    method: "post",
+    path: "/coach-assignments",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "Assign a coach to an age group",
+    description:
+      "Overlapping assignments for the same (coach, group) pair are rejected by an exclusion constraint. CONTRACT GAP: API_CONTRACTS §1.1 names no error code for the overlap, so this row declares none; see the M1 handoff.",
+    tags: ["Groups"],
+    mutating: true,
+    audit: "coach_assignment.create",
+    body: z.strictObject({
+      coachUserId: Id,
+      ageGroupId: Id,
+      assignedFrom: DateStr,
+    }),
+    responses: [res.json(201, CoachAssignment, "Created assignment")],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "CCH-04",
+    method: "post",
+    path: "/coach-assignments/{id}/end",
+    auth: "owner",
+    permission: "groups:manage",
+    summary: "End a coach assignment",
+    description:
+      "Access to future sessions ends immediately; attendance the coach already recorded stays visible to owners (AUTH §6).",
+    tags: ["Groups"],
+    mutating: true,
+    audit: "coach_assignment.end",
+    params: idParams,
+    body: z.strictObject({ assignedTo: DateStr }),
+    responses: [res.json(200, CoachAssignment, "Ended assignment")],
+    errors: ["VALIDATION_ERROR"],
+    milestone: "m3",
+  }),
+
+  endpoint({
+    id: "CCH-05",
+    method: "get",
+    path: "/me/groups",
+    auth: "coach_scoped",
+    permission: "groups:read",
+    scope: "Own current assignments only",
+    summary: "Groups the caller currently coaches",
+    tags: ["Groups"],
+    responses: [res.json(200, MyGroupsResponse, "Assigned groups with player counts")],
+    milestone: "m3",
+  }),
+]);
