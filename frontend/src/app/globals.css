@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+/* Inspire Academy design tokens (DESIGN_SYSTEM §2 + §10). Text wordmark until OPEN-001 logo arrives. */
+
+:root {
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --text: #14181f;
+  --text-muted: #566070;
+  --border: #dde1e7;
+  --brand: #16a34a;
+  --brand-hover: #15803d;
+  --brand-contrast: #ffffff;
+  --navy: #0a1f44;
+  --info: #1d5fd1;
+  --success: #1e7a43;
+  --warning: #9a6200;
+  --danger: #b3261e;
+  --focus: #1d5fd1;
+  --z-nav: 20;
+  --z-top: 30;
+  --z-modal: 50;
+}
+
+@theme {
+  --color-navy-900: #0a1f44;
+  --color-navy-800: #12295a;
+  --color-navy-700: #1b3a75;
+  --color-pitch-600: #16a34a;
+  --color-pitch-700: #15803d;
+  --color-pitch-50: #f0fdf4;
+  --color-amberx-500: #f59e0b;
+  --color-amberx-50: #fffbeb;
+  --font-heading: "Poppins", "Inter", system-ui, sans-serif;
+  --font-body: "Inter", "Noto Sans", "Noto Sans Sinhala", "Noto Sans Tamil", system-ui, sans-serif;
+  --shadow-card: 0 1px 2px rgba(10, 31, 68, 0.06), 0 1px 3px rgba(10, 31, 68, 0.08);
+  --shadow-pop: 0 12px 32px rgba(10, 31, 68, 0.18);
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.6;
+}
+
+h1, h2, h3, .font-heading {
+  font-family: var(--font-heading);
+}
+
+*:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.touch44 {
+  min-height: 44px;
+  min-width: 44px;
+  touch-action: manipulation;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.skeleton {
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 50%, #e2e8f0 75%);
+  background-size: 200% 100%;
+  animation: sk 1.4s infinite;
+}
+
+@keyframes sk {
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

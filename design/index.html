@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Inspire Academy — Management System (Front-End Design)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        navy: { 900:'#0A1F44', 800:'#12295A', 700:'#1B3A75' },
+        pitch: { 600:'#16A34A', 700:'#15803D', 50:'#F0FDF4' },
+        amberx: { 500:'#F59E0B', 50:'#FFFBEB' },
+      },
+      fontFamily: {
+        heading: ['Poppins','sans-serif'],
+        body: ['Inter','sans-serif'],
+      },
+      boxShadow: {
+        card: '0 1px 2px rgba(10,31,68,.06), 0 1px 3px rgba(10,31,68,.08)',
+        pop: '0 12px 32px rgba(10,31,68,.18)',
+      }
+    }
+  }
+}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap" rel="stylesheet" />
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+<style>
+  :root{ --z-nav:20; --z-top:30; --z-modal:50; }
+  html{ -webkit-tap-highlight-color: transparent; }
+  body{ font-family:'Inter',sans-serif; background:#F1F5F9; color:#0F172A; font-size:16px; line-height:1.6; }
+  h1,h2,h3,.font-heading{ font-family:'Poppins',sans-serif; }
+  *:focus-visible{ outline:2px solid #16A34A; outline-offset:2px; border-radius:6px; }
+  .touch44{ min-height:44px; min-width:44px; touch-action:manipulation; }
+  .navlink{ transition:background-color 200ms, color 200ms; }
+  .card-hover{ transition:box-shadow 200ms, border-color 200ms; }
+  .card-hover:hover{ box-shadow:0 4px 14px rgba(10,31,68,.12); }
+  .btn{ transition:background-color 200ms, color 200ms, border-color 200ms; }
+  .tabular{ font-variant-numeric:tabular-nums; }
+  .scrollx{ overflow-x:auto; overscroll-behavior-x:contain; }
+  .atbtn{ transition:background-color 200ms, border-color 200ms, color 200ms; }
+  .atbtn[aria-pressed="true"]{ border-width:2px; }
+  .bar{ transition:height 300ms ease, width 300ms ease; }
+  ::-webkit-scrollbar{ height:8px; width:8px; } ::-webkit-scrollbar-thumb{ background:#CBD5E1; border-radius:8px; }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none!important; transition:none!important; } }
+  .skeleton{ background:linear-gradient(90deg,#E2E8F0 25%,#F1F5F9 50%,#E2E8F0 75%); background-size:200% 100%; animation:sk 1.4s infinite; }
+  @keyframes sk{ to{ background-position:-200% 0; } }
+  .line-clamp-2{ display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+</style>
+</head>
+<body class="antialiased">
+
+<!-- ============ DESKTOP SIDEBAR ============ -->
+<aside id="sidebar" class="hidden lg:flex fixed inset-y-0 left-0 w-[248px] flex-col bg-navy-900 text-white" style="z-index:var(--z-nav)" aria-label="Primary">
+  <div class="flex items-center gap-3 px-5 pt-6 pb-5 border-b border-white/10">
+    <div class="w-11 h-11 rounded-xl bg-pitch-600 flex items-center justify-center shrink-0" aria-hidden="true">
+      <i data-lucide="trophy" class="w-6 h-6 text-white"></i>
+    </div>
+    <div>
+      <p class="font-heading font-700 font-bold text-[17px] leading-tight">Inspire Academy</p>
+      <p class="text-[12px] text-slate-300 tracking-wide">FOOTBALL CLUB · MGMT</p>
+    </div>
+  </div>
+  <nav id="sideNav" class="flex-1 overflow-y-auto px-3 py-4 space-y-1 text-[14px]" aria-label="Sections"></nav>
+  <div class="px-4 py-4 border-t border-white/10">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-full bg-white/15 flex items-center justify-center font-heading font-semibold" id="roleAvatar">OW</div>
+      <div class="min-w-0">
+        <p class="text-[14px] font-semibold truncate" id="roleName">S. Perera · Owner</p>
+        <button id="roleSwitchSide" class="btn cursor-pointer text-[12px] text-slate-300 hover:text-white underline underline-offset-2">Switch to Coach view</button>
+      </div>
+    </div>
+    <div class="mt-3 flex items-center gap-2 text-[12px] rounded-lg bg-white/5 border border-white/10 px-3 py-2">
+      <span class="w-2 h-2 rounded-full bg-emerald-400" id="openwaDot"></span>
+      <span class="text-slate-200" id="openwaLabel">OpenWA connected</span>
+    </div>
+  </div>
+</aside>
+
+<!-- ============ TOPBAR ============ -->
+<header class="lg:pl-[248px]">
+  <div class="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-200" style="z-index:var(--z-top)">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-[64px] flex items-center gap-3">
+      <div class="lg:hidden w-9 h-9 rounded-lg bg-navy-900 flex items-center justify-center shrink-0" aria-hidden="true">
+        <i data-lucide="trophy" class="w-5 h-5 text-white"></i>
+      </div>
+      <div class="min-w-0 flex-1">
+        <h1 id="pageTitle" class="font-heading font-semibold text-[17px] sm:text-[20px] text-slate-900 leading-tight truncate">Dashboard</h1>
+        <p id="pageSub" class="text-[12px] sm:text-[13px] text-slate-600 truncate">Academy overview · Tue 11 Oct 2026</p>
+      </div>
+      <div class="hidden md:flex items-center gap-2 bg-slate-100 border border-slate-200 rounded-lg px-3 h-11 w-64">
+        <i data-lucide="search" class="w-4 h-4 text-slate-500"></i>
+        <input id="globalSearch" type="search" placeholder="Search players, invoices…" aria-label="Global search"
+          class="bg-transparent outline-none text-[14px] w-full placeholder:text-slate-500" />
+      </div>
+      <button id="rolePill" class="btn cursor-pointer touch44 hidden sm:inline-flex items-center gap-2 h-11 px-3 rounded-lg border border-slate-200 bg-white text-[13px] font-semibold hover:border-pitch-600" title="Toggle role">
+        <i data-lucide="shield-check" class="w-4 h-4 text-pitch-600"></i><span id="rolePillText">Owner</span>
+      </button>
+      <button class="btn cursor-pointer touch44 relative w-11 h-11 inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white hover:border-pitch-600" aria-label="Notifications, 3 unread">
+        <i data-lucide="bell" class="w-5 h-5 text-slate-700"></i>
+        <span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-red-500"></span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ============ MAIN VIEW ============ -->
+  <main id="view" class="max-w-7xl mx-auto px-4 sm:px-6 pt-5 pb-28 lg:pb-12 min-h-[calc(100dvh-64px)]" tabindex="-1"></main>
+</header>
+
+<!-- ============ MOBILE BOTTOM NAV ============ -->
+<nav id="bottomNav" class="lg:hidden fixed bottom-0 inset-x-0 bg-white border-t border-slate-200" style="z-index:var(--z-nav)" aria-label="Mobile"></nav>
+
+<!-- ============ MORE SHEET (mobile) ============ -->
+<div id="moreSheet" class="hidden fixed inset-0" style="z-index:var(--z-modal)" role="dialog" aria-modal="true" aria-label="More sections">
+  <div class="absolute inset-0 bg-navy-900/50" data-close-more></div>
+  <div class="absolute bottom-0 inset-x-0 bg-white rounded-t-2xl max-h-[75dvh] overflow-y-auto p-4">
+    <div class="w-10 h-1 rounded-full bg-slate-300 mx-auto mb-3"></div>
+    <div id="moreGrid" class="grid grid-cols-3 gap-2"></div>
+    <button data-close-more class="btn cursor-pointer touch44 mt-3 w-full h-12 rounded-xl border border-slate-200 font-semibold">Close</button>
+  </div>
+</div>
+
+<!-- ============ MODAL ============ -->
+<div id="modal" class="hidden fixed inset-0 items-center justify-center p-4" style="z-index:var(--z-modal)" role="dialog" aria-modal="true">
+  <div class="absolute inset-0 bg-navy-900/55" data-close-modal></div>
+  <div id="modalCard" class="relative bg-white w-full max-w-lg rounded-2xl shadow-pop max-h-[88dvh] overflow-y-auto"></div>
+</div>
+
+<!-- ============ CONFIRM ============ -->
+<div id="confirm" class="hidden fixed inset-0 items-center justify-center p-4" style="z-index:var(--z-modal)" role="alertdialog" aria-modal="true">
+  <div class="absolute inset-0 bg-navy-900/55"></div>
+  <div class="relative bg-white w-full max-w-sm rounded-2xl shadow-pop p-6">
+    <div class="w-11 h-11 rounded-full bg-red-50 flex items-center justify-center mb-3"><i data-lucide="alert-triangle" class="w-5 h-5 text-red-600"></i></div>
+    <h3 id="confirmTitle" class="font-heading font-semibold text-[17px]">Confirm action</h3>
+    <p id="confirmText" class="text-[14px] text-slate-600 mt-1"></p>
+    <div class="grid grid-cols-2 gap-2 mt-5">
+      <button id="confirmCancel" class="btn cursor-pointer touch44 h-12 rounded-xl border border-slate-200 font-semibold">Cancel</button>
+      <button id="confirmOk" class="btn cursor-pointer touch44 h-12 rounded-xl bg-red-600 text-white font-semibold hover:bg-red-700">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============ TOASTS ============ -->
+<div id="toasts" class="fixed bottom-20 lg:bottom-6 left-1/2 -translate-x-1/2 lg:left-auto lg:translate-x-0 lg:right-6 flex flex-col gap-2 items-center" style="z-index:var(--z-modal)" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

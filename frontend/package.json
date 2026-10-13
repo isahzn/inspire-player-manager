@@ -1,0 +1,40 @@
+{
+  "name": "frontend",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3100",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
+    "verify:e2e": "node .verify/step2-e2e.mjs && node .verify/step3-e2e.mjs && node .verify/step4-e2e.mjs && node .verify/step5-e2e.mjs && node .verify/step678-e2e.mjs",
+    "verify:e2e:step3": "node .verify/step3-e2e.mjs",
+    "verify:e2e:step4": "node .verify/step4-e2e.mjs",
+    "verify:e2e:step5": "node .verify/step5-e2e.mjs",
+    "verify:e2e:step678": "node .verify/step678-e2e.mjs",
+    "verify:unit": "vitest run",
+    "verify:links": "node .verify/dead-links.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.104.1",
+    "lucide-react": "^1.55.0",
+    "msw": "^2.15.0",
+    "next": "16.4.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/turbopack": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.4.0",
+    "playwright-core": "^1.64.0",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^3.2.7"
+  }
+}

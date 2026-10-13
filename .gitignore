@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+dist/
+build/
+out/
+
+# Verification artifacts (logs are kept, screenshots are not)
+frontend/.verify/*.png
+*.tsbuildinfo
+
+# Local Postgres data directory (embedded-postgres, machines without Docker)
+.pgdata/
+
+# Env files — .env.example is committed, real env files are not
+.env
+.env.*
+!.env.example
+
+# Logs and OS noise
+*.log
+.DS_Store
+Thumbs.db
