@@ -61,7 +61,18 @@
 
 <a id="adr-008"></a>
 ## ADR-008: PDF via library (PDFKit) with Chromium fallback
-**Status:** Proposed (spike P1). **Decision:** Start with PDFKit, embedded Noto fonts; if Sinhala/Tamil shaping fails, use headless Chromium HTML→PDF. **Alternatives:** Chromium first (heavier ops, larger attack surface, but easy HTML layout/complex-script shaping). **Consequences:** M6 begins with a time-boxed spike; the PDF layout spec is renderer-independent.
+**Status:** **Accepted 2026-10-13 — spike P1 run**; the Sinhala/Tamil branch stays open pending the owner's answer (`NEEDS_FROM_OWNER` §1 item 2). **Decision:** PDFKit with an embedded Latin font (Noto Sans); if Sinhala/Tamil must render, use headless Chromium HTML→PDF. **Alternatives:** Chromium first (heavier ops, larger attack surface, but easy HTML layout/complex-script shaping). **Consequences:** M6's entry condition is met; the PDF layout spec is renderer-independent.
+
+**Spike P1 result** (`backend/scripts/spike-p1.ts`, runnable — `npx tsx scripts/spike-p1.ts`, corpus in `backend/var/spike-p1/`):
+
+| Measured | Result |
+|---|---|
+| Valid PDF, Latin round-trip | ✅ `%PDF-`, 26-char string round-trips **verbatim** through the content stream |
+| Built-in fonts, Sinhala/Tamil | ❌ **Mojibake** — the bytes written are substituted single-byte values (`Û\u001dÒÛ½Ü¢…`), not the name |
+| Embedded font that has the glyphs | PDFKit (via fontkit) **does** apply GSUB merging: `ක්‍ර` (3 code points) becomes **one** glyph, distinct from the ka and ra drawn alone |
+| Indic **reordering** (vowel sign draws before its consonant) | **Cannot be proven from the PDF.** Once a cluster collapses to a single glyph, a glyph id cannot reveal draw order, and no reference shaper (HarfBuzz) is available here to compare against. Glyph counting is therefore not evidence of correct shaping, and the spike does not claim it is |
+
+**Which way that cuts.** English-only is **proven sound**: PDFKit with `Noto Sans` (Latin) is deterministic, tiny, and needs no browser to patch, secure or size. Sinhala/Tamil is **not settled by this spike** — it needs a visual check, which is exactly what M6's exit evidence already demands ("manual visual review of invoice/receipt samples by Hassen + owner"). Until that review passes, non-Latin names must not be rendered: the honest options are English-only, or switching the engine to Chromium. Independently of the answer, **no Sinhala or Tamil font exists in this repository**, so either path needs one added (OFL licensed, several hundred KB).
 
 <a id="adr-009"></a>
 ## ADR-009: Contract ownership
