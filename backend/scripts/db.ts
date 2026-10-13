@@ -21,6 +21,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { Client } from "pg";
@@ -87,7 +88,9 @@ function run(tool: string, args: string[], opts: { allowFailure?: boolean } = {}
 async function initialise() {
   if (existsSync(path.join(DATA_DIR, "PG_VERSION"))) return;
   await mkdir(DATA_DIR, { recursive: true });
-  const pwFile = path.join(DATA_DIR, ".initpw");
+  // The password file must live OUTSIDE the data directory: initdb refuses to
+  // initialise a directory that is not empty.
+  const pwFile = path.join(tmpdir(), `ia-initpw-${process.pid}`);
   await writeFile(pwFile, SUPERUSER_PASSWORD, "utf8");
   console.log(`initialising cluster in ${DATA_DIR}`);
   try {
@@ -117,15 +120,29 @@ function isRunning(): boolean {
 }
 
 async function ensureDatabases() {
-  const admin = new Client({ connectionString: superuserUrl("postgres") });
+  const admin = new Client({ client_encoding: "UTF8", connectionString: superuserUrl("postgres") });
   await admin.connect();
   try {
+    // Guard: a cluster created without an explicit encoding defaults to the
+    // Windows console code page (WIN1252), which cannot store Sinhala/Tamil names
+    // or the message templates. Fail loudly instead of silently corrupting data.
+    const enc = await admin.query<{ encoding: string }>(
+      "select pg_encoding_to_char(encoding) as encoding from pg_database where datname = current_database()",
+    );
+    if (enc.rows[0]?.encoding !== "UTF8") {
+      throw new Error(
+        `cluster encoding is ${enc.rows[0]?.encoding}, expected UTF8. Run \`npm run db:destroy\` then \`npm run db:up\`.`,
+      );
+    }
     const existing = await admin.query<{ datname: string }>("select datname from pg_database");
     const names = new Set(existing.rows.map((r) => r.datname));
     for (const db of DATABASES) {
       if (names.has(db)) continue;
       // Identifiers are from a fixed allow-list, never interpolated user input.
-      await admin.query(`create database "${db}" owner "${SUPERUSER}"`);
+      // template0 + explicit UTF8 so the database encoding never depends on the host locale.
+      await admin.query(
+        `create database "${db}" owner "${SUPERUSER}" encoding 'UTF8' template template0 lc_collate 'C' lc_ctype 'C'`,
+      );
       console.log(`created database ${db}`);
     }
   } finally {
@@ -152,6 +169,9 @@ async function up() {
       "start",
     ]);
   }
+  // pg_ctl -w can report success slightly before the postmaster accepts TCP
+  // connections on Windows, so wait for a real connection before creating databases.
+  await waitForReady();
   await ensureDatabases();
   console.log(`ready: ${superuserUrl("ia_dev")}`);
 }
@@ -175,7 +195,10 @@ function status() {
 export async function waitForReady(timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const client = new Client({ connectionString: superuserUrl("postgres") });
+    const client = new Client({
+      client_encoding: "UTF8",
+      connectionString: superuserUrl("postgres"),
+    });
     try {
       await client.connect();
       await client.end();
