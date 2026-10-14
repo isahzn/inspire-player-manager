@@ -31,6 +31,7 @@ import { readStoredFile } from "../files/storage.js";
 import { buildPreview, issueRun, loadBillingContext } from "../routes/billing-engine.js";
 import { generateInvoicePdf, generateReceiptPdf } from "../routes/pdf-service.js";
 import { checkInvoiceHealth, loadInvoiceHealthRows } from "../ops/invoice-health.js";
+import { uploadAuditAnchor } from "../ops/audit-anchor.js";
 import { JOB, NOT_BUILT_JOBS, type JobName } from "../ops/job-runs.js";
 
 export interface JobContext {
@@ -353,12 +354,16 @@ async function runInvariantNightly(ctx: JobContext): Promise<JobResult> {
          or (i.status in ('issued','partially_paid','paid') and i.balance_minor <> i.total_minor - i.paid_minor)`,
   );
 
-  const detail = {
+  /** Set inside the `checked > 0` branch below; `null` means there was no chain to anchor. */
+  let anchor: Awaited<ReturnType<typeof uploadAuditAnchor>> | null = null;
+  const arithmeticMismatches = Number(arithmetic.rows[0]?.mismatch ?? 0);
+
+  const detail: Record<string, unknown> = {
     invoicesChecked: report.summary.checked,
     invoiceErrors: report.summary.errors,
     invoiceWarns: report.summary.warns,
     overdueCount: report.summary.overdueCount,
-    arithmeticMismatches: Number(arithmetic.rows[0]?.mismatch ?? 0),
+    arithmeticMismatches,
     auditRowsChecked: checked,
     auditChainBroken: broken,
   };
@@ -370,26 +375,55 @@ async function runInvariantNightly(ctx: JobContext): Promise<JobResult> {
     const bounds = await ctx.client.query<{ min_id: string | null; max_id: string | null }>(
       `select min(id)::text as min_id, max(id)::text as max_id from audit_logs`,
     );
-    await ctx.client.query(
+    const anchorId = uuidv7();
+    const inserted = await ctx.client.query<{ created_at: Date }>(
       `insert into audit_anchors (id, verified_from, verified_to, head_hash, rows_checked)
-       values ($1, $2::bigint, $3::bigint, $4, $5)`,
+       values ($1, $2::bigint, $3::bigint, $4, $5)
+       returning created_at`,
       [
-        uuidv7(),
+        anchorId,
         bounds.rows[0]?.min_id ?? "1",
         bounds.rows[0]?.max_id ?? "1",
         chainRow.head ?? "",
         checked,
       ],
     );
+
+    // Then upload it off-host. The row above lives in the same database as the rows it attests
+    // to, so on its own it is a record of intent, not evidence: the copy in the bucket is the
+    // witness the database cannot revise (DEPLOYMENT §7). The document carries the row's own
+    // `created_at`, read back from the insert, so the two can never disagree about when the
+    // chain was verified.
+    anchor = await uploadAuditAnchor(
+      {
+        id: anchorId,
+        verifiedFrom: bounds.rows[0]?.min_id ?? "1",
+        verifiedTo: bounds.rows[0]?.max_id ?? "1",
+        headHash: chainRow.head ?? "",
+        rowsChecked: checked,
+        createdAt: inserted.rows[0]!.created_at,
+      },
+      { timezone: ctx.timezone },
+    );
   }
+
+  detail["anchorStatus"] = anchor?.status ?? "nothing_to_anchor";
+  detail["anchorObject"] = anchor?.key ?? null;
+  detail["anchorDetail"] =
+    anchor?.detail ??
+    "No audit rows have been recorded yet, so there is nothing to anchor off-host.";
 
   // A failed invariant is the one thing the release procedure calls a rollback trigger
   // (DEPLOYMENT §5). Throwing records the run `failed`, which is what SYS-03 and the alerting
-  // read — the detail is already on the row.
-  if (errors.length > 0 || broken > 0 || detail.arithmeticMismatches > 0) {
+  // read — the detail is already on the row. A configured anchor bucket that will not accept the
+  // upload joins that list: a deployment that believes it has off-host tamper evidence and does
+  // not is worse off than one that never claimed it.
+  const anchorFailed = anchor?.status === "failed";
+  if (errors.length > 0 || broken > 0 || arithmeticMismatches > 0 || anchorFailed) {
     throw new Error(
       `invariant violation: ${errors.length} invoice error(s), ${broken} broken audit hash(es), ` +
-        `${detail.arithmeticMismatches} total mismatch(es)`,
+        `${arithmeticMismatches} total mismatch(es)` +
+        (anchorFailed ? `, audit anchor upload failed: ${anchor?.detail ?? ""}` : ""),
     );
   }
 
