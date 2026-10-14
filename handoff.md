@@ -50,6 +50,8 @@ HTTP on `:80`, with the HTTPS switch documented inline in
 | **The deployment itself, on the VPS** | **Running.** `ia_db`, `ia_api`, `ia_worker` all `healthy` and `ia_caddy` up, HTTP-only on `:80`. 17 migrations applied, seed applied, and the database holds **exactly one user — the owner, `invited`, with a live 72 h invite**. `GET /api/v1/health` → `200 {"status":"ok"}`; an unauthenticated `GET /api/v1/users` → **401 `UNAUTHENTICATED` with a `requestId`** (the real router, not a 404) (§12) |
 | **Login over plain HTTP** | **Verified end to end** with a throwaway active coach, over the forwarded SSH port: `POST /api/v1/auth/login` → 200 and `Set-Cookie: ia_session=…; Path=/; HttpOnly; SameSite=Lax` — **no `Secure`**, because `COOKIE_SECURE=false` for the HTTP-only pilot — then `GET /api/v1/auth/me` → **200 with the cookie and 401 without it**. The throwaway account was deleted afterwards and the database is back to one row (§12) |
 | **Reaching the API from the internet** | **The forward works; DNS is the last step.** The VM sits behind the provider's NAT (`enp16s0 192.168.122.24`), and the provider now routes the hostname **`inspire-player.lk`** to this VM's port 80. Verified **from outside**: `Host: inspire-player.lk` against `93.127.141.71` → `/api/v1/health` **200 `{"status":"ok"}`**, an unauthenticated `/api/v1/users` → **401 with a `requestId`**, and a CORS preflight for `http://inspire-player.lk` → **204** with the matching `Access-Control-Allow-Origin`. `inspire-player.lk` is **NXDOMAIN** today, so the A record is all that is missing (§5) |
+| **The app itself** | **Deployed on the same box and the same origin as the API.** `ia_web` (Next.js 16.4, `ia-frontend:prod`) is healthy; Caddy sends `/api/*` to the API and everything else to the app. Verified **from outside** through the provider's forward: `/login` **200**, `/accept-invite?token=…` **200**, `/` **307 → /dashboard**, `/api/v1/health` **200**, `/api/v1/users` **401**, and **zero `msw` in the bundles actually served** — the mock-mode trap is checked rather than assumed (§12.7) |
+| **The owner's invite** | **Issued and live (72 h, single use), and it needs DNS.** `reset-owner` produced `http://inspire-player.lk/accept-invite?token=…` on the new hostname. Nobody can open it until that name resolves (§5) — which is the whole distance between “deployed” and “the owner is using it” |
 | **The nightly logical backup** | **Works, and has been restored.** `pg_dump` 16.15 is in the image, and the job connects as **`ia_backup`** — read-only, and the only role with `BYPASSRLS`, because `pg_dump` sets `row_security = off` and every table here is FORCE RLS (§12.6). `job_runs` for 2026-10-14 reads **`ok`** with a 186 KiB dump, and a full **restore drill passed in 3 s** (35 tables, 17 migrations, the academy row) — entry 1 in [`RESTORE_LOG.md`](docs/engineering/RESTORE_LOG.md). A *failed* dump still leaves no file behind (§12.4) |
 
 Endpoint progress: **M2 23/23 · M3 31/31 · M4 19/19 · M5 26/26 · M6 9/9 · M7 0/21 · M8 6/6.**
@@ -389,14 +391,13 @@ looking exactly like a backup. §12 has each one with the evidence that found it
 
 ## 10. Next steps, in order
 
-1. ~~**Push so CI runs once**~~ — **done** (run #2 on `f7c656a` green, guard live), **the VPS
-   deployment is done**, and **the dump role is chosen and working** (§2). What is left: **(a)** point
-   the A record for `inspire-player.lk` at `93.127.141.71` — the provider's forward already works and
-   the base URLs and CORS are set to that host (§5); **(b)** deploy `frontend/`, which is now the
-   *user-visible* blocker, because the invite the owner needs is `<APP_BASE_URL>/accept-invite?token=…`
-   — a **frontend** route — and then re-issue the invite so the link carries the new hostname;
-   **(c)** copy the dumps and `ia_files` off the machine (runbook 12b); **(d)** turn HTTPS on by
-   changing one line in the Caddyfile and putting `COOKIE_SECURE=true` back.
+1. ~~**Push so CI runs once**~~ — **done**. ~~the VPS deployment~~ — **done**. ~~the dump role~~ —
+   **done and restored**. ~~deploy `frontend/`~~ — **done, same origin as the API** (§12.7). ~~re-issue
+   the invite~~ — **done and live**. What is left, in order: **(a)** one **A record** for
+   `inspire-player.lk` → `93.127.141.71` (§5). Everything the owner needs is already waiting behind
+   it: their invite link is `http://inspire-player.lk/accept-invite?token=…`, valid for 72 h from
+   2026-10-14 17:02Z; **(b)** copy the dumps and `ia_files` off the machine (runbook 12b); **(c)** turn
+   HTTPS on by changing one line in the Caddyfile and putting `COOKIE_SECURE=true` back.
 2. **Run `npm run storage:probe` and `npm run storage:probe -- --anchor` against the real bucket**
    before anything is deployed into it, and decide the provider (`OPEN-016`). The driver's interop is
    proven against a local S3 server; virtual-host addressing is not, and no production provider has
@@ -619,6 +620,47 @@ It is written up as [`RESTORE_LOG.md`](docs/engineering/RESTORE_LOG.md) entry 1,
 stated there rather than implied: 3 s is a floor measured on an almost-empty database, the dump still
 lives on the machine it protects, and `ia_files` (the payment proofs) is not in it.
 
+### 12.7 The frontend, and a bug that only existed outside mock mode
+
+The runbook's plan was Vercel or Cloudflare Pages for the app and this VPS for the API. **I put the
+app on the same box and the same origin instead**, because it is strictly simpler and needs no
+third-party account: `handle /api/*` goes to the API, `handle` goes to the app, so there is no
+cross-origin request at all — no CORS to configure, and the `SameSite=Lax` session cookie is
+same-origin by construction rather than by a shared registrable domain. The box had the headroom
+(2 vCPU, 3.8 GiB, 55 GB free). The deviation is written down in the runbook §11 with its reasoning,
+not left as a surprise.
+
+`frontend/Dockerfile` and a `web` compose service are new. `NEXT_PUBLIC_API_BASE_URL` is
+**relative** (`/api/v1`): every API caller in this app is a client component and nothing fetches
+during SSR, so a relative base resolves against whatever origin the browser is on — which means the
+TLS switch later needs no rebuild, and the app does not depend on its own public name resolving from
+inside its container.
+
+**Then the build failed, and the reason is the useful part.**
+
+```
+Error occurred prerendering page "/age-groups/[id]" ... digest: 'CLIENT_HOOK_DYNAMIC'
+     50 | export function AppShell({ children }: { children: React.ReactNode }) {
+     51 |   const pathname = usePathname();
+```
+
+`AppShell` sits in the root layout and uses `usePathname()`/`useRouter()`. With `cacheComponents` on,
+Next refuses those hooks during prerender unless a Suspense boundary is above them — correctly, since
+it cannot prerender a shell whose whole navigation depends on the URL. `src/app/layout.tsx` now wraps
+the shell in `<Suspense>` with a small `AppLoading` fallback.
+
+**Why no earlier session caught it, which is the part worth remembering:** `NEXT_PUBLIC_USE_MOCKS=true`
+lives in a developer's untracked `.env.local`, and in mock mode `Providers` renders `null` until the
+MSW worker starts — so prerendering never reached `AppShell` and the hooks were never called. **Every
+build this project had ever done was a mock build**, which is exactly the trap runbook §11 calls the
+most expensive mistake available: a mock build is green, looks right, and proves nothing about the
+app that will actually talk to the API.
+
+The verification that closes that gap is not "the build passed" — it is that the **served bundles
+contain no MSW worker** (`0` hits), the title is the real one, `/api/v1/health` answers `200 JSON`
+from the API while `/api/v1/users` answers `401`, and the invite route renders. All four were checked
+from outside the box, not just on it.
+
 ## 13. Previous session — the push, the guard, and two real defects
 
 **What was asked:** push everything except WhatsApp to
@@ -661,9 +703,9 @@ rests on, not because it is still true.
 
 Money, documents, the dashboard, the reports, the audit trail and the system page all work and are
 tested; **messaging is still the only missing feature, and it waits on pairing the gateway on a VPS
-that exists** rather than on a phone number. **A backend is deployed and reachable** — database, API,
-worker and reverse proxy, 17 migrations, one invited owner, a login path verified over HTTP, and a
-nightly dump that has been **restored** — with the hostname `inspire-player.lk` already forwarded to
-it and only its **A record** missing. What stands between here and production is **DNS**, a deployed
-**frontend** (which is what turns the owner's invite link into something they can open), TLS, an
-off-host copy of the dumps and the payment proofs, a security review, and the owner items in §5.
+that exists** rather than on a phone number. **The whole system is deployed** — database, API, worker,
+reverse proxy and the Next.js app on one origin, 17 migrations, a login path verified over HTTP, a
+nightly dump that has been **restored**, and a live invite for the owner waiting on a single **A
+record** for `inspire-player.lk`. What stands between here and production is that **one DNS entry**,
+TLS, an off-host copy of the dumps and the payment proofs, a security review, and the owner items in
+§5.

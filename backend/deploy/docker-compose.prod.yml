@@ -113,6 +113,24 @@ services:
       timeout: 5s
       retries: 3
 
+  web:
+    # The Next.js app. Built from `frontend/Dockerfile`, and the only service whose image is not the
+    # backend's. It is served from the SAME origin as the API (see the Caddyfile), which is what
+    # removes cross-origin cookies and CORS from this deployment entirely.
+    image: ${IA_WEB_IMAGE:-ia-frontend:prod}
+    container_name: ia_web
+    restart: unless-stopped
+    environment:
+      PORT: "3100"
+      HOSTNAME: "0.0.0.0"
+    # No `env_file`: every value this app needs is a `NEXT_PUBLIC_*` variable inlined at build time
+    # (frontend/Dockerfile explains why the API base is relative). Mounting `.env.production` here
+    # would hand the frontend the database passwords for no reason.
+    expose: ["3100"]
+    depends_on:
+      - api
+    stop_grace_period: 20s
+
   caddy:
     image: caddy:2-alpine
     container_name: ia_caddy

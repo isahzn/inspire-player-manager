@@ -292,24 +292,52 @@ curl -fsS -b cookies.txt https://api.<domain>/api/v1/system/health | head -40
 #      and the three messaging jobs reading `skipped` with a reason — not `ok`.
 ```
 
-## 11. The frontend
+## 11. The frontend — same host, same origin as the API
 
-Two variables, both **inlined at build time** — changing them later requires a rebuild, not a
-restart.
+**Implementation note (2026-10-14, handoff §12.7).** The plan here was Vercel or Cloudflare Pages on
+`app.<domain>`. *This deployment serves the Next.js app from the same Caddy and the same origin as the
+API instead* — `handle /api/*` goes to the API and everything else to the app. That is strictly
+simpler: no cross-origin request, so no CORS to configure and the `SameSite=Lax` session cookie is
+same-origin by construction rather than by a shared registrable domain. It also needs no third-party
+account. The box has the headroom (2 vCPU, 3.8 GiB, 55 GB free), and `frontend/Dockerfile` builds it.
+
+The two variables are **inlined at build time** — changing them means rebuilding, not restarting.
+They are Docker build args with these defaults, so a plain `docker build` is already correct:
 
 ```bash
-# On your machine (or in the host's build settings):
-NEXT_PUBLIC_USE_MOCKS=false
-NEXT_PUBLIC_API_BASE_URL=https://api.<domain>
+NEXT_PUBLIC_USE_MOCKS=false       # a mock-mode build is the most expensive mistake in this runbook
+NEXT_PUBLIC_API_BASE_URL=/api/v1  # RELATIVE on purpose: the app is same-origin, and because every
+                                  # API caller is a client component (nothing fetches during SSR)
+                                  # this survives the TLS switch with no rebuild. The `/api/v1`
+                                  # prefix is required — the client calls `/auth/me`, `/players`, …
 ```
 
-Deploy `frontend/` to Vercel or Cloudflare Pages as a Next.js project, with `app.<domain>` as the
-domain. Then set `APP_BASE_URL` and `CORS_ALLOWED_ORIGINS` in `.env.production` to `https://app.<domain>`
-and `docker compose ... up -d api` to reload.
+```bash
+cd /opt/inspire/src/frontend
+docker build -t ia-frontend:prod .
+cd ../backend/deploy
+C="docker compose -f docker-compose.prod.yml --env-file .env.production"
+$C --profile localdb up -d web
+```
 
-If `NEXT_PUBLIC_USE_MOCKS` is left `true`, the app runs against its **mock** API: everything looks
-right and nothing is real. This is the most expensive mistake available in this runbook — check the
-browser's network tab shows requests to `api.<domain>`.
+Then **prove the mocks are off**, because a mock build looks completely healthy:
+
+```bash
+curl -s http://127.0.0.1/ | grep -o '<title>[^<]*'     # the real app title
+curl -sI http://127.0.0.1/api/v1/health                # 200 JSON — the API, not the app
+# the strongest check: no msw worker in the bundles actually served
+curl -s http://127.0.0.1/ | grep -o '/_next/static/[^"]*\.js' | head -20 \
+  | while read -r f; do curl -s "http://127.0.0.1$f"; done | grep -c msw   # → 0
+```
+
+**A latent bug this uncovered — know it before you build.** This app had only ever been built in
+**mock mode**, because `NEXT_PUBLIC_USE_MOCKS=true` lives in a developer's `.env.local`. In mock mode
+`Providers` returns `null` until the MSW worker starts, so prerendering never reached `AppShell`;
+and `AppShell` uses `usePathname()`/`useRouter()` in the root layout, which `cacheComponents` refuses
+during prerender unless a Suspense boundary sits above it. The first mocks-off build therefore failed
+with `CLIENT_HOOK_DYNAMIC`, and `src/app/layout.tsx` now wraps the shell in `<Suspense>`. If a future
+build fails that way, that is the shape of the problem — a green mock build proves nothing about a
+real one.
 
 ## 12. Backups — and the restore that makes them a backup
 
@@ -413,13 +441,17 @@ cd /opt/inspire/src/backend
 git pull
 SHA=$(git rev-parse --short HEAD)
 docker build -t ia-backend:$SHA . && docker tag ia-backend:$SHA ia-backend:current
+# The frontend is a SECOND image. It needs rebuilding only when `frontend/` changed, but a build
+# that skipped it after a frontend change is the quiet kind of stale.
+docker build -t ia-frontend:prod ../frontend
 
 cd deploy
 C="docker compose -f docker-compose.prod.yml --env-file .env.production"
 $C --profile localdb run --rm --entrypoint node api dist/scripts/migrate.js   # before the new code
-$C --profile localdb up -d api worker
+$C --profile localdb up -d api worker web
 curl -fsS http://127.0.0.1:3200/api/v1/ready
-docker compose -f docker-compose.prod.yml logs --since 5m api worker | grep -i error
+curl -fsS http://127.0.0.1/api/v1/health
+docker compose -f docker-compose.prod.yml logs --since 5m api worker web | grep -i error
 ```
 
 Backup first (DEPLOYMENT §5 step 3) whenever the release includes a migration.

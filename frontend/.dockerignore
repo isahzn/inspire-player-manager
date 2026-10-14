@@ -1,0 +1,20 @@
+# Everything here is either rebuilt inside the image or must not travel in it.
+#
+# `node_modules` and `.next` are the important ones: a developer's Linux/macOS/Windows build output
+# copied into the image context lands on top of the ones `npm ci` and `next build` just produced.
+node_modules
+.next
+tsconfig.tsbuildinfo
+
+# Local environment files. `NEXT_PUBLIC_USE_MOCKS=true` lives in `.env.local` on a development
+# machine, and shipping it would be the one mistake this deployment cannot afford — the app would
+# talk to its mocks while looking perfectly healthy.
+.env.local
+.env.development.local
+.env.production.local
+
+# Verification and editor noise.
+.verify
+.git
+.gitignore
+*.log

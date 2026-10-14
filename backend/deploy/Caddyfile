@@ -1,24 +1,26 @@
-# Caddy for the Inspire Academy API (DEPLOYMENT_AND_OPERATIONS §2).
+# Caddy for the Inspire Academy deployment (DEPLOYMENT_AND_OPERATIONS §2).
 #
-# CURRENT STATE: HTTP-only on port 80.
+# CURRENT STATE: HTTP-only on port 80, serving the app AND the API from one origin.
 #
-# The academy has no domain configured yet — no DNS A record pointing at this VPS and no
-# mailbox for Let's Encrypt notices — so this file deliberately has NO site hostname.
-# Caddy then serves plain HTTP and never attempts ACME. Pointing it at a hostname it
-# cannot validate made Caddy log a certificate failure every minute and answer every
-# request with a 308 to an HTTPS port that had no certificate.
+# The academy has no domain configured *yet* in DNS (no A record, and no mailbox for Let's Encrypt
+# notices), so this file deliberately has NO site hostname. Caddy then serves plain HTTP and never
+# attempts ACME. Pointing it at a hostname it could not validate made Caddy log a certificate failure
+# every minute and answer every request with a 308 to an HTTPS port that had no certificate.
 #
-# TO TURN HTTPS ON, once api.<domain> resolves to this VPS:
+# TO TURN HTTPS ON, once `inspire-player.lk` resolves to this VPS:
 #   1. set API_HOST and ACME_EMAIL in .env.production to the real values;
 #   2. replace the `:80 {` site address below with `{$API_HOST} {`;
-#   3. docker compose -f docker-compose.prod.yml --env-file .env.production --profile localdb up -d caddy
+#   3. set COOKIE_SECURE=true in .env.production — a `Secure` cookie is discarded by the browser over
+#      plain HTTP, which is why it is false for this pilot (handoff §12.5);
+#   4. docker compose -f docker-compose.prod.yml --env-file .env.production --profile localdb up -d caddy
 #      — Caddy then obtains and renews the certificate itself. Nothing below that line changes.
 #
-# Only the API is proxied here. The frontend goes on a static/SSR host (Vercel, Cloudflare
-# Pages) at APP_HOST — DEPLOYMENT §2's recommendation — because the session cookie is
-# `SameSite=Lax` and works across origins only while both hosts share a registrable domain
-# (`app.x.lk` + `api.x.lk`). `COOKIE_DOMAIN` may stay empty: the API's cookie is host-only,
-# which is the safer setting and is sufficient for that arrangement.
+# ONE ORIGIN, TWO SERVICES. `/api/*` is the API; everything else is the Next.js app. Serving both
+# from the same hostname is not a convenience detail: the session cookie is `SameSite=Lax`, so a
+# cookie set by the API is only sent on app requests when the two share an origin (or, at best, a
+# registrable domain). Same origin means there is no CORS to configure and no cookie-domain reasoning
+# to get wrong. `NEXT_PUBLIC_API_BASE_URL` is therefore relative (`/api/v1`), and the app also stops
+# depending on the public name resolving from inside its own container.
 
 {
 	# Used only once a hostname site exists; harmless (and unused) over plain HTTP.
@@ -47,11 +49,21 @@
 		max_size 10MiB
 	}
 
+	# The API keeps its own `/api/v1` prefix — the router mounts every contract route under it and
+	# the app calls `${NEXT_PUBLIC_API_BASE_URL}${path}` with paths like `/auth/me`.
+	#
 	# No `header_up X-Request-Id`: the API owns request ids. It echoes a well-formed inbound one
 	# and otherwise generates a UUID, and it returns the value in `X-Request-Id` — which is what
 	# to search the API logs by. Inventing a second id at the proxy would only add a number
 	# nothing correlates.
-	reverse_proxy api:3200
+	handle /api/* {
+		reverse_proxy api:3200
+	}
+
+	# Everything else is the app: the pages, `/login`, `/accept-invite`, the static assets.
+	handle {
+		reverse_proxy web:3100
+	}
 
 	# HSTS is set by the API's helmet config when NODE_ENV=production (max-age 180 days,
 	# includeSubDomains), deliberately NOT duplicated here: two sources for one header is how
