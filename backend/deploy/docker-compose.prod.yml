@@ -1,0 +1,139 @@
+# Inspire Academy — production stack for a single VPS (DEPLOYMENT_AND_OPERATIONS §2).
+#
+# NOT RUN ANYWHERE YET. This machine has no Docker, so this file is written and YAML-parsed but
+# has never been started. The runbook that goes with it is
+# docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md; nothing here is a claim that it works.
+#
+# Design notes, so the choices are auditable rather than magic:
+#
+#   · ONE IMAGE, TWO PROCESSES. `api` and `worker` are the same build; only APP_ENTRY differs.
+#     That is what makes "deploy the same image twice" true (Dockerfile §2/§5).
+#   · NO HOST PORTS for the API. Only Caddy is published; it reaches `api:3200` over the compose
+#     network. TRUST_PROXY must be `true` in the environment file or every client looks like
+#     Caddy to the rate limiter (300 req/min would then be a shared, global budget).
+#   · STORAGE IS VPS-LOCAL (OPEN-016, decided 2026-10-14). `STORAGE_DRIVER=local` writes into the
+#     `ia_files` volume, mounted at /app/var/files. A bucket on the same machine is NOT a backup:
+#     §7's off-host copy of proofs is still mandatory and is not something this file can do.
+#   · The `db` service is OPTIONAL. DEPLOYMENT §2 asks for managed PostgreSQL with point-in-time
+#     recovery; run `--profile localdb` only if you have decided against that, and change
+#     DATABASE_* in the environment file to point at the managed host if you have not.
+#
+# Usage (from the directory holding this file, with `.env.production` beside it):
+#
+#   docker compose -f docker-compose.prod.yml --env-file .env.production pull
+#   docker compose -f docker-compose.prod.yml --env-file .env.production --profile localdb up -d db
+#   docker compose -f docker-compose.prod.yml --env-file .env.production --profile localdb up -d
+#
+# (Compose reads `.env` for `${VAR}` interpolation by default; `--env-file` is passed explicitly
+# so there is exactly one place the values come from.)
+
+name: inspire
+
+services:
+  db:
+    # Optional: see the header. Postgres 16 to match CI and `scripts/db.ts`.
+    profiles: ["localdb"]
+    image: postgres:16-alpine
+    container_name: ia_db
+    restart: unless-stopped
+    env_file: [.env.production]
+    environment:
+      # The superuser the one-time role bootstrap uses (bootstrap-roles.ts). Day-to-day, neither
+      # the API nor the worker ever connects as this role.
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?set POSTGRES_SUPERUSER_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-ia_prod}
+    volumes:
+      - ia_pgdata:/var/lib/postgresql/data
+    # Reachable only from this compose network — never published to the host.
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-postgres} -d ${POSTGRES_DB:-ia_prod}"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    command:
+      - "postgres"
+      - "-c"
+      - "timezone=UTC"
+      # Financial rows are integer minor units and the app sets its own timeouts, but a
+      # server-side statement timeout is the backstop for anything that escapes the pool.
+      - "-c"
+      - "statement_timeout=30000"
+
+  api:
+    image: ${IA_IMAGE:-ghcr.io/isahzn/inspire-backend:latest}
+    container_name: ia_api
+    restart: unless-stopped
+    env_file: [.env.production]
+    environment:
+      # FILES_DIR / BACKUP_DIR are the two paths the image creates and owns (uid 1001).
+      FILES_DIR: /app/var/files
+      BACKUP_DIR: /app/var/backups
+    volumes:
+      - ia_files:/app/var/files
+    expose: ["3200"]
+    # Loopback only, so `curl localhost:3200/ready` works on the box and nothing else can reach it.
+    ports:
+      - "127.0.0.1:3200:3200"
+    depends_on:
+      db:
+        condition: service_healthy
+        required: false
+    # The image already declares a /health HEALTHCHECK; `depends_on` cannot wait on it, so Caddy
+    # is what actually gates traffic — it returns 502 until the API answers.
+    stop_grace_period: 30s
+
+  worker:
+    image: ${IA_IMAGE:-ghcr.io/isahzn/inspire-backend:latest}
+    container_name: ia_worker
+    restart: unless-stopped
+    env_file: [.env.production]
+    environment:
+      # The only difference between this container and `api`.
+      APP_ENTRY: dist/src/worker/index.js
+      FILES_DIR: /app/var/files
+      BACKUP_DIR: /app/var/backups
+    volumes:
+      # The worker writes PDFs and the nightly dump; the API only reads.
+      - ia_files:/app/var/files
+      - ia_backups:/app/var/backups
+    depends_on:
+      - db
+    # SIGTERM must reach Node directly (the image uses `exec`), because the worker finishes its
+    # current job and releases `sending` rows on the way down.
+    stop_grace_period: 60s
+    healthcheck:
+      # The worker opens no socket, so health is "is the process still there" and nothing more.
+      # The real signal is `scheduler.lastRunAt` on GET /system/health (DEPLOYMENT §6).
+      test: ["CMD", "node", "-e", "process.exit(0)"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ia_caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      # Your email, for Let's Encrypt expiry notices. Set in the environment file.
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env.production}
+      API_HOST: ${API_HOST:?set API_HOST, e.g. api.your-academy.lk}
+      APP_HOST: ${APP_HOST:?set APP_HOST, e.g. app.your-academy.lk}
+    depends_on:
+      - api
+
+volumes:
+  ia_pgdata:
+  ia_files:
+  ia_backups:
+  caddy_data:
+  caddy_config:

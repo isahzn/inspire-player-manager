@@ -58,6 +58,14 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 COPY --from=build /app/dist ./dist
 
+# The SQL is looked up at run time, not compiled in, and both paths are relative to the working
+# directory (`scripts/migrate.ts`: MIGRATIONS_DIR = cwd/migrations; `scripts/bootstrap-roles.ts`:
+# cwd/db/bootstrap.sql). Without these two lines the image starts but cannot be migrated or
+# bootstrapped — the failure only appears on the VPS, as an ENOENT from an operator CLI, which is
+# exactly the kind of gap that gets discovered at the worst moment.
+COPY migrations ./migrations
+COPY db ./db
+
 # `STORAGE_DRIVER=local` writes here (FILES_AND_PDF §5); a production deployment sets
 # `STORAGE_DRIVER=s3` and this directory stays empty. `BACKUP_DIR` defaults to var/backups.
 RUN mkdir -p /app/var/files /app/var/backups \

@@ -1,0 +1,49 @@
+# Caddy for the Inspire Academy API (DEPLOYMENT_AND_OPERATIONS §2).
+#
+# NOT RUN ANYWHERE YET — this machine has no Docker. It is written and syntax-reasoned, not
+# executed. `caddy validate --config Caddyfile` on the VPS is the first real check, and it is
+# step 7 of docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md.
+#
+# Only the API is proxied here. The frontend goes on a static/SSR host (Vercel, Cloudflare Pages)
+# at APP_HOST — DEPLOYMENT §2's recommendation — because the session cookie is `SameSite=Lax`
+# and works across origins only while both hosts share a registrable domain (`app.x.lk` +
+# `api.x.lk`). `COOKIE_DOMAIN` may stay empty: the API's cookie is host-only, which is the safer
+# setting and is sufficient for that arrangement.
+
+{
+	email {$ACME_EMAIL}
+	# Automatic HTTPS with Let's Encrypt is on by default for a site block with a hostname.
+	log {
+		# stdout, so `docker compose logs -f caddy` is the one place to look and Docker's
+		# json-file driver does the rotation. A file inside the container would be a second,
+		# less discoverable copy.
+		format json
+	}
+}
+
+# API_HOST is the full hostname, e.g. api.your-academy.lk.
+{$API_HOST} {
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+
+	# The largest upload any endpoint accepts is PRF-01's 5 MiB proof, and the backend's own
+	# multipart limit is that same number (src/http/plugins.ts). 10 MiB here is headroom for
+	# multipart framing, not a second policy.
+	request_body {
+		max_size 10MiB
+	}
+
+	# No `header_up X-Request-Id`: the API owns request ids. It echoes a well-formed inbound one
+	# and otherwise generates a UUID, and it returns the value in `X-Request-Id` — which is what
+	# to search the API logs by. Inventing a second id at the proxy would only add a number
+	# nothing correlates.
+	reverse_proxy api:3200
+
+	# HSTS is set by the API's helmet config when NODE_ENV=production (max-age 180 days,
+	# includeSubDomains), deliberately NOT duplicated here: two sources for one header is how
+	# they drift.
+}

@@ -1,9 +1,9 @@
 # handoff.md — read this one first
 
-> **Updated:** 2026-10-14 (second backend session of the day: the S3 boundary proved against a real
-> server, the audit anchor uploaded off-host, and the audit hash chain repaired) · **Owner granted
-> standing permission** (§6) — ordinary development, local infrastructure and commits need no further
-> approval.
+> **Updated:** 2026-10-14 (third backend session of the day: the repository is pushed and CI has run,
+> a green run now has to prove the tests ran, the image can finally migrate, and the VPS runbook
+> exists) · **Owner granted standing permission** (§6) — ordinary development, local infrastructure
+> and commits need no further approval.
 >
 > This file is the whole picture: what works, what is broken, what only a person can supply, and the
 > exact next actions. The milestone records live in
@@ -37,15 +37,19 @@ Four things, in this order, with the fourth deliberately not started:
 | `npm run storage:probe` (`-- --anchor` too) | **9/9 PASS, exit 0** against a real S3 server (`rclone serve s3`), including the negative: a wrong-secret signature is rejected `403`, an unsigned request `400` |
 | `npx tsx scripts/progress-report.ts` | **114 / 135 endpoints** |
 | `npm run openapi` + `npx redocly lint ../api/openapi.yaml` | valid, **135 operations**, 3 pre-existing warnings |
-| `node tools/check-links.mjs` | exit 0 — 56 files / 399 links, 0 broken |
+| `node tools/check-links.mjs` | exit 0 — 58 files / 409 links, 0 broken (the runbook included) |
+| `npm run test:assert-report:self-test` | **exit 0** — 5 cases: a complete green run passes, and an all-skipped run, a run missing its `db` project, a short run and a failed run each fail |
+| `npm run test:report` + `npm run test:assert-report` | **exit 0, and it prints the real numbers**: 260 tests in 27 files — unit 7, db 4, integration 16 — passed 260, failed 0, pending 0, todo 0 |
+| `npm run build` → `ls dist/scripts` | **exit 0**, and `migrate.js`, `bootstrap-roles.js`, `create-owner.js`, `storage-probe.js` are all emitted — which is what makes §3's Dockerfile fix checkable |
 | `node tools/check-stale-refs.mts` | exit 0 — no stale provider references |
-| Commits | **11 atomic commits** for M2–M8 (the 46 paths and the M8 work both committed); the working tree holds no source changes, and the two sample receipts stay untracked on purpose (§5.3) |
+| Commits | **11 atomic commits** for M2–M8, then this session's CI-guard commit; the tree holds no source changes, and the two sample receipts stay untracked on purpose (§5.3) |
 | The worker, run for real | `npm run worker:once` exit 0, then `job_runs`/`worker_heartbeats` **read back out of the database**: five daily jobs `ok`, `ops.logical_backup skipped` (no `BACKUP_DIR`), and **nothing re-claimed that had already succeeded** — the `(job, run_key)` idempotency observed, not asserted |
 | The nightly invariant job, run for real on a chain with the anchor configured | **`ops.invariant_nightly ok`**, 3 audit rows checked, `auditChainBroken: 0`, `anchorStatus: uploaded` — and the uploaded object's `headHash` **equals** the chain head read back from the database (§3) |
 
 Endpoint progress: **M2 23/23 · M3 31/31 · M4 19/19 · M5 26/26 · M6 9/9 · M7 0/21 · M8 6/6.**
 
-Nothing is deployed; CI now exists and has **never run** (§11, gate item 1).
+Nothing is deployed (though there is now a runbook to follow — §12); CI exists and has run green twice
+(§3 item 3), and the second run has to prove the tests ran rather than merely pass.
 
 ## 3. What works, what is broken, what needs fixing
 
@@ -98,8 +102,17 @@ Nothing is deployed; CI now exists and has **never run** (§11, gate item 1).
    that a forged signature is refused (`403`). What is still unexercised: **virtual-host addressing**
    and any actual provider (R2/S3/Supabase). **Run the probe against the real bucket before any
    deployment trusts proofs to it** — it is on the go-live checklist (DEPLOYMENT §9).
-3. **CI has never run.** There is no remote and no runner, so `.github/workflows/ci.yml` is a written
-   workflow, not a green one. The first push is its first test.
+3. **CI has now run, twice, and both were green — but the first one was green for the wrong
+   reason, and that is fixed.** Push #1 reported `success` in 69 s with the suite "passing" in 40 s
+   against a locally measured 254 s, and nothing in the log could distinguish that from a run that
+   ran nothing. That shape is not hypothetical here: this project has twice seen a vitest file whose
+   `beforeAll` threw reported as **skipped**, so an unreachable database yields a fast, empty, green
+   run. CI now runs `npm run test:report` and then `scripts/assert-test-report.mjs`, which fails the
+   build on any skipped/pending/todo test, on a project that produced no files, or on a total below
+   `scripts/tests-minimums.json` (260 tests / 27 files today). **The guard carries its own
+   `--self-test`**, and it earned its place immediately: the self-test caught a bug in its own
+   fixture on the first run. What is *still* unobserved is the corrected pipeline — the second push
+   has not been watched to completion yet.
 4. **The suite was flaky, and it was the harness.** Diagnosed and fixed this session (§9); two
    consecutive full runs are green since. Worth knowing because the failure mode looked like product
    breakage: logins answering 500 and `deadlock detected` out of `truncate`.
@@ -178,8 +191,9 @@ can run the whole system today without any of it.
    same machine is not a backup of that machine.
 8. Smaller release-gate items (retention periods with the accountant, mandatory TOTP) — details in
    [`NEEDS_FROM_OWNER.md`](NEEDS_FROM_OWNER.md) §1.
-9. **A CI runner** — a remote to push to (or a self-hosted runner). Without it, gate item 1 stays
-   unobservable no matter how good the workflow file is.
+9. ~~**A CI runner**~~ — **supplied 2026-10-14**: the remote is
+   `https://github.com/isahzn/inspire-player-manager.git` and both CI runs so far are green. Gate
+   item 1 is now observable.
 
 ## 6. Standing permission — recorded at the owner's instruction
 
@@ -197,6 +211,12 @@ done, you have permission."* Recorded as:
   substitutes for them, which is why §5 exists.
 
 ## 7. Active files
+
+**Third session of 2026-10-14** — new: `backend/scripts/assert-test-report.mjs`,
+`backend/scripts/tests-minimums.json`, `backend/deploy/docker-compose.prod.yml`,
+`backend/deploy/Caddyfile`, [the VPS runbook](docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md). Modified:
+`backend/Dockerfile` (**it could not migrate** — §12), `backend/package.json`,
+`.github/workflows/ci.yml`, `.gitignore`, this file.
 
 **Second session of 2026-10-14** — new: `backend/src/ops/audit-anchor.ts`,
 `backend/scripts/storage-probe.ts`, `backend/migrations/0016_audit_chain_reader.sql`,
@@ -302,8 +322,9 @@ The four things worth carrying in your head:
   worth noting: the anchor's first implementation *did* inherit `STORAGE_BUCKET` — the corrected test
   failed and found it.## 10. Next steps, in order
 
-1. **Push so CI runs once** (needs a remote, §5.8). The workflow has never executed and now covers
-   260 tests.
+1. ~~**Push so CI runs once**~~ — **done.** CI is green, and the run now has to *prove* it ran the
+   suite (§3 item 3). **Watch the run after the guard's commit**: the guard is only trustworthy once
+   its corrected pipeline has been observed end to end on a runner.
 2. **Run `npm run storage:probe` and `npm run storage:probe -- --anchor` against the real bucket**
    before anything is deployed into it, and decide the provider (`OPEN-016`). The driver's interop is
    proven against a local S3 server; virtual-host addressing is not, and no production provider has
@@ -333,7 +354,7 @@ M9–M10 — checked against what the code actually is today.
 
 | # | Gate | State today |
 |---|---|---|
-| 1 | CI green on the release commit | **Reachable, not observed.** `.github/workflows/ci.yml` exists (typecheck, build, contract, the full suite against a real PostgreSQL, and the documentation tools) but there is no remote and no runner, so it has never executed. The suite is green *locally*: 260/260, exit 0 |
+| 1 | CI green on the release commit | **Ran, green, and now forced to be honest about it.** `.github/workflows/ci.yml` runs typecheck, build, contract generation + lint, the full suite against a real PostgreSQL, and the documentation tools; two runs exist on `origin/master`, both green. The second push added `assert-test-report.mjs`, which refuses a short or skipped run — a green run now *proves* it ran 260 tests in 27 files, not merely that it exited 0. The suite is green locally too: 260/260, exit 0 |
 | 2 | E2E smoke on staging (login, register, attendance, clock in/out, billing run, payment + receipt, `PRF-04` queue, WhatsApp via mock, void) | **Not possible — nothing is deployed, there is no staging** |
 | 3 | T-FIL-09 and T-MSG-02/03/06 pass | T-FIL-09 **passes**; **every T-MSG row is blocked** (M7 unbuilt) |
 | 4 | OpenWA spike S1 (O18–O22) + T-MSG-12 on the real number | **Not started** — needs the number (§5.1) |
@@ -393,6 +414,43 @@ worker (built), managed Postgres, the frontend pointed at the real API (it alrea
 `NEXT_PUBLIC_USE_MOCKS` is off and `NEXT_PUBLIC_API_BASE_URL` is set), a domain with TLS, real secrets,
 one backup **with a tested restore**, `create-owner` + TOTP, and the owner's real fees and bank
 details. **Guardian-facing automation is the expensive half, not the money engine.**
+
+## 12. This session — the push, the guard, and two real defects
+
+**What was asked:** push everything except WhatsApp to
+`https://github.com/isahzn/inspire-player-manager.git`, then explain how to get it onto a VPS.
+
+1. **Pushed.** 316 tracked files on `origin/master`; the two sample receipts stayed untracked on
+   purpose. A secret/PII pass ran first: no `.env`, no key, no phone number, no PII PDF in the tree.
+2. **CI ran, and its first green was not trustworthy.** 69 s total, the suite "passing" in 40 s
+   against a locally measured 254 s. Rather than accept it, the counts are now asserted: the
+   workflow writes `test-report.json` and `assert-test-report.mjs` fails the build on a skipped or
+   pending test, on a project that ran no files, or on a total below `tests-minimums.json`. The
+   guard has a `--self-test`, and **it immediately failed on its own fixture** — the fixture used
+   relative paths where the rules match `/tests/unit/` with a leading slash, so every project
+   scored zero. A guard nobody has watched fail is a guard nobody can trust; this one failed on
+   contact and was fixed.
+3. **The image could not migrate — a real deployment blocker, found while writing the runbook.**
+   `scripts/migrate.ts` reads `process.cwd()/migrations` and `scripts/bootstrap-roles.ts` reads
+   `cwd/db/bootstrap.sql`, and the Dockerfile's runtime stage copied only `dist/` and
+   `package.json`. The image would have started cleanly and then failed on the VPS, at the worst
+   moment, with an ENOENT from an operator CLI. The runtime stage now copies `migrations/` and
+   `db/`. The CLIs are also reached with `--entrypoint node`, because the image's
+   `ENTRYPOINT sh -c 'exec node "$APP_ENTRY"'` silently drops extra arguments.
+4. **The VPS runbook exists** — [VPS_DEPLOYMENT_RUNBOOK.md](docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md)
+   — with the environment file's every line classified as required / required-for-correctness /
+   optional / ignore, and the honest limits stated up front.
+
+**The answer to "what API keys do you need": none.** No payment gateway, no email API, no
+third-party key. The three required secrets are `SESSION_COOKIE_SECRET`, `CSRF_SECRET` and
+`TOTP_ENCRYPTION_KEY` (all `openssl rand -base64 48`), plus the database URLs' own passwords.
+`SENTRY_DSN` is documented but **not wired**, and `DEV_OWNER_USERNAME`/`DEV_OWNER_PASSWORD` in
+`.env.example` are read by **nothing** — worth deleting from the template so nobody sets them
+believing an account will appear.
+
+**The two deploy artefacts are unrun.** This machine has no Docker, so `docker-compose.prod.yml`
+and `Caddyfile` are written and YAML-parsed (`compose parses OK` — services `db, api, worker, caddy`)
+but have never been started. `caddy validate` on the VPS is their first real check (runbook step 8.1).
 
 ### The one-line version
 
