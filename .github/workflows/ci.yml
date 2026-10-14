@@ -62,6 +62,11 @@ jobs:
       - name: Create the environment file
         run: cp .env.example .env
 
+      # No database is needed to check the report's rules, and a broken assert script would
+      # otherwise only be discovered after a 4-minute suite run.
+      - name: Self-test the test-report guard against known-good and known-bad reports
+        run: npm run test:assert-report:self-test
+
       - name: Start the local PostgreSQL cluster
         run: npm run db:up
 
@@ -84,8 +89,23 @@ jobs:
       - name: Lint the OpenAPI document
         run: npm run openapi:lint
 
+      # Writes test-report.json as well as the human output, so the step below can read the
+      # run's own numbers instead of trusting the exit code.
       - name: Tests (unit + database + integration)
-        run: npm run test:all
+        run: npm run test:report
+
+      # A green run is not proof the tests ran. This project has already seen a suite report
+      # 0 failures because a project silently skipped (an unreachable database makes vitest
+      # report a file whose beforeAll threw as *skipped*), and the first CI run here passed in
+      # 40 s against a local measurement of 254 s — the exact shape of a "nothing ran" green
+      # run. `assert-test-report.mjs` fails the build on a short run, a skipped project, or a
+      # count below backend/scripts/tests-minimums.json.
+      #
+      # `if: always()` on purpose: when the tests fail this still runs and prints the real
+      # counts, which is what makes the log diagnosable.
+      - name: Prove the suite actually ran (no skipped project, no short run)
+        if: always()
+        run: npm run test:assert-report
 
       - name: Stop the local PostgreSQL cluster
         if: always()
