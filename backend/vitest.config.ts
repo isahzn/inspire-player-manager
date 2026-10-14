@@ -43,6 +43,15 @@ const testEnv: Record<string, string> = {
 
 export default defineConfig({
   test: {
+    // All three projects run against the same `ia_test`. Vitest runs projects **in
+    // parallel**, and `resetData()` takes an ACCESS EXCLUSIVE lock across twenty-odd
+    // tables, so the db project and the integration project's live API traffic can meet:
+    // observed as `error: deadlock detected` out of the `truncate`, and as logins answering
+    // 500 because the truncate deleted `users` underneath them. `fileParallelism: false`
+    // below only orders files *within* a project, so the projects themselves are serialised
+    // here. One worker means exactly one writer-project touching the database at a time.
+    maxWorkers: 1,
+    fileParallelism: false,
     projects: [
       {
         test: {
