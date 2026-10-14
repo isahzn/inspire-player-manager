@@ -117,6 +117,11 @@ import {
   cat05Correct,
 } from "./coach-time.js";
 import { dsh02Coach } from "./dashboard.js";
+// M8 — DSH-01 (owner dashboard), RPT-01/02 (reports + CSV), AUD-01, SYS-03
+import { dsh01Owner } from "./owner-dashboard.js";
+import { rpt01Run, rpt02Export } from "./reports.js";
+import { aud01List } from "./audit.js";
+import { sys03Health } from "./system-detail.js";
 
 export const handlers: Map<string, Handler> = new Map<string, Handler>([
   // AUTH-01..07
@@ -254,4 +259,12 @@ export const handlers: Map<string, Handler> = new Map<string, Handler>([
   ["PUB-02", pub02Logo],
   // M8 — DSH-02 (the coach's own dashboard)
   ["DSH-02", dsh02Coach],
+  // M8 — DSH-01 (the owner dashboard), RPT-01/02 (reports), AUD-01 (audit trail),
+  // SYS-03 (detailed health). SYS-03 is the operator's page: without it, monitoring and
+  // the worker's own evidence have no surface at all.
+  ["DSH-01", dsh01Owner],
+  ["RPT-01", rpt01Run],
+  ["RPT-02", rpt02Export],
+  ["AUD-01", aud01List],
+  ["SYS-03", sys03Health],
 ]);

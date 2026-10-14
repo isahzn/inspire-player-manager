@@ -1082,7 +1082,12 @@ export const AuditEntry = registry.register(
     actor: z.object({ id: Id, fullName: z.string(), role: Role }).optional(),
     action: z.string(),
     entityType: z.string(),
-    entityId: Id,
+    // [CONTRACT] optional, and the database agrees: `audit_logs.entity_id` is nullable
+    // because some audited actions have no single subject — `auth.login`, a settings
+    // write on the singleton academy row, a scheduler-triggered billing run. The M8
+    // handoff §4.1 records the change; AUD-01 lists every row, not only the ones with
+    // an entity, because an audit trail with holes is not an audit trail.
+    entityId: Id.optional(),
     reason: z.string().optional(),
     before: z.unknown().optional(),
     after: z.unknown().optional(),
@@ -1099,8 +1104,23 @@ export const SystemHealth = registry.register(
     storage: z.object({ status: HealthState, detail: z.string().optional() }),
     openwa: z.object({ status: HealthState, detail: z.string().optional() }),
     queue: z.object({ status: HealthState, detail: z.string().optional() }),
-    scheduler: z.object({ lastRunAt: Instant }),
-    lastBackup: z.object({ at: Instant, status: z.enum(["ok", "failed", "unknown"]) }),
+    // [CONTRACT] `lastRunAt` stays required, but two optional fields carry what an
+    // operator actually needs and the shape could not express: whether that timestamp
+    // is too old to trust (`stale`, the 5-minute rule in DEPLOYMENT §6), and the name
+    // of the job it came from. A worker that has never run has no `lastRunAt` to send;
+    // SYS-03 answers the epoch with `stale: true` and a detail naming the reason, rather
+    // than inventing a recent time or dropping a required field. Recorded in the M8
+    // handoff §4.2.
+    scheduler: z.object({
+      lastRunAt: Instant,
+      stale: z.boolean().optional().describe("True when the last run is older than 5 minutes"),
+      detail: z.string().optional(),
+    }),
+    lastBackup: z.object({
+      at: Instant,
+      status: z.enum(["ok", "failed", "unknown"]),
+      detail: z.string().optional(),
+    }),
     version: z.string(),
   }),
 );

@@ -2534,7 +2534,6 @@ components:
         - occurredAt
         - action
         - entityType
-        - entityId
         - requestId
     SystemHealth:
       type: object
@@ -2602,6 +2601,11 @@ components:
               type: string
               format: date-time
               description: Instant, ISO-8601 UTC
+            stale:
+              type: boolean
+              description: True when the last run is older than 5 minutes
+            detail:
+              type: string
           required:
             - lastRunAt
         lastBackup:
@@ -2617,6 +2621,8 @@ components:
                 - ok
                 - failed
                 - unknown
+            detail:
+              type: string
           required:
             - at
             - status

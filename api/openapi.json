@@ -3487,7 +3487,6 @@
           "occurredAt",
           "action",
           "entityType",
-          "entityId",
           "requestId"
         ]
       },
@@ -3581,6 +3580,13 @@
                 "type": "string",
                 "format": "date-time",
                 "description": "Instant, ISO-8601 UTC"
+              },
+              "stale": {
+                "type": "boolean",
+                "description": "True when the last run is older than 5 minutes"
+              },
+              "detail": {
+                "type": "string"
               }
             },
             "required": [
@@ -3602,6 +3608,9 @@
                   "failed",
                   "unknown"
                 ]
+              },
+              "detail": {
+                "type": "string"
               }
             },
             "required": [
