@@ -31,6 +31,7 @@
     "reset-owner": "tsx scripts/reset-owner.ts",
     "invoice-message": "tsx scripts/invoice-message.ts",
     "check:invoices": "tsx scripts/invoice-health.ts",
+    "storage:probe": "tsx scripts/storage-probe.ts",
     "test": "vitest run --project unit",
     "test:unit": "vitest run --project unit",
     "test:db": "vitest run --project db",

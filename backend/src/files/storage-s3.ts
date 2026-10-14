@@ -27,14 +27,23 @@
  *    different reason: a key that escapes its prefix is the difference between "this object" and
  *    "somebody else's object" in a shared bucket.
  *
- * NOT VERIFIED: the requests produced here have never been sent to a real bucket in this
- * session. The unit test asserts the crypto primitives against published NIST/RFC vectors and
- * asserts the canonical-request and signature construction against an independent second
- * implementation written from the specification — it is a **spec-conformance and structural**
- * check, not proof of interoperability with AWS/MinIO/R2. Reproducing the AWS documentation's
- * end-to-end `AKIDEXAMPLE` signature from memory was not reliable enough to assert, and a
- * guessed constant is worse than an acknowledged gap. Confirm once against MinIO or R2 before
- * the first production write.
+ * INTEROPERABILITY: proven once, on 2026-10-14, against a **real S3 server** (`rclone serve s3`,
+ * which verifies SigV4 itself) with `scripts/storage-probe.ts` (`npm run storage:probe`): a
+ * 1.5 MB object round-tripped byte-for-byte, a missing object read as `null`, a hostile key never
+ * left the process, and — the check that gives the rest its meaning — a request signed with the
+ * wrong secret was **rejected 403** and an unsigned one 400. A server that accepted a bad
+ * signature would have made the successful writes prove nothing.
+ *
+ * Still not proven: **virtual-host addressing** (rclone serves one bucket by path, so only
+ * path-style was exercised) and interop with a specific production provider (R2/AWS/Supabase) —
+ * `npm run storage:probe` run against the real bucket is the check that settles those, and it is
+ * the release-gate step before the first production write. The unit test remains the
+ * spec-conformance check: crypto primitives against published NIST/RFC vectors, and the signature
+ * against an independent second implementation written from the specification.
+ *
+ * A **second bucket** (the audit anchor, `AUDIT_ANCHOR_*`) reuses this file's signing by passing
+ * its own `S3Config` to `s3Put` — see `src/ops/audit-anchor.ts`. One signer, two buckets, because
+ * a second copy of SigV4 would be a second place to get it wrong.
  */
 import { createHash, createHmac } from "node:crypto";
 import { isAbsolute } from "node:path";
@@ -60,22 +69,64 @@ export interface S3Config {
 }
 
 /**
- * Reads the bucket configuration, or `null` when it is incomplete.
+ * Which environment variables a bucket's configuration is read from.
+ *
+ * A parameter rather than a constant because there are two buckets — the files bucket
+ * (`STORAGE_*`) and the audit anchor bucket (`AUDIT_ANCHOR_*`, `src/ops/audit-anchor.ts`) — and
+ * one reader for both means "what makes a bucket configuration valid" cannot drift between them.
+ */
+export interface S3EnvNames {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  forcePathStyle: string;
+  prefix: string;
+}
+
+/** The files bucket, as DEPLOYMENT §4 freezes the names. */
+export const STORAGE_ENV_NAMES: S3EnvNames = {
+  endpoint: "STORAGE_ENDPOINT",
+  region: "STORAGE_REGION",
+  bucket: "STORAGE_BUCKET",
+  accessKeyId: "STORAGE_ACCESS_KEY_ID",
+  secretAccessKey: "STORAGE_SECRET_ACCESS_KEY",
+  forcePathStyle: "STORAGE_FORCE_PATH_STYLE",
+  prefix: "STORAGE_PREFIX",
+};
+
+/**
+ * Reads a bucket configuration, or `null` when it is incomplete.
  *
  * Deliberately lazy (see the file header): the values come from the environment on each call, so
  * a test can set them and a deployment can rotate them without a restart.
+ *
+ * `fallbackNames` is how a second bucket inherits transport details it does not name itself —
+ * an explicit chain with one hop, not a guess. It is **partial on purpose**, and the anchor uses
+ * it exactly that way: it may inherit the endpoint, region and credentials from `STORAGE_*`, but
+ * never the bucket name or the prefix. Those two are what make it a *different* bucket; inheriting
+ * them would quietly point the tamper-evidence copy at the very storage it is meant to be
+ * independent of.
  */
-export function loadS3Config(env: NodeJS.ProcessEnv = process.env): S3Config | null {
-  const endpoint = env["STORAGE_ENDPOINT"]?.trim();
-  const bucket = env["STORAGE_BUCKET"]?.trim();
-  const accessKeyId = env["STORAGE_ACCESS_KEY_ID"]?.trim();
-  const secretAccessKey = env["STORAGE_SECRET_ACCESS_KEY"]?.trim();
+export function loadS3Config(
+  env: NodeJS.ProcessEnv = process.env,
+  names: S3EnvNames = STORAGE_ENV_NAMES,
+  fallbackNames: Partial<S3EnvNames> | null = null,
+): S3Config | null {
+  const read = (name: string, fallback: string | undefined): string | undefined =>
+    env[name]?.trim() || (fallback ? env[fallback]?.trim() : undefined);
+
+  const endpoint = read(names.endpoint, fallbackNames?.endpoint);
+  const bucket = read(names.bucket, fallbackNames?.bucket);
+  const accessKeyId = read(names.accessKeyId, fallbackNames?.accessKeyId);
+  const secretAccessKey = read(names.secretAccessKey, fallbackNames?.secretAccessKey);
   if (!endpoint || !bucket || !accessKeyId || !secretAccessKey) return null;
 
-  const region = env["STORAGE_REGION"]?.trim() || "auto";
-  const prefix = env["STORAGE_PREFIX"]?.trim() || null;
+  const region = read(names.region, fallbackNames?.region) || "auto";
+  const prefix = env[names.prefix]?.trim() || null;
   const forcePathStyle = ["true", "1"].includes(
-    (env["STORAGE_FORCE_PATH_STYLE"] ?? "").trim().toLowerCase(),
+    (read(names.forcePathStyle, fallbackNames?.forcePathStyle) ?? "").trim().toLowerCase(),
   );
 
   if (!isUsableEndpoint(endpoint)) return null;
@@ -108,15 +159,29 @@ export function s3Configured(env: NodeJS.ProcessEnv = process.env): boolean {
  * is missing. It never contains a credential — this string is rendered on a page and written to
  * logs (SECURITY_AND_PRIVACY §3).
  */
-export function s3StatusDetail(env: NodeJS.ProcessEnv = process.env): string {
-  const cfg = loadS3Config(env);
+export function s3StatusDetail(
+  env: NodeJS.ProcessEnv = process.env,
+  names: S3EnvNames = STORAGE_ENV_NAMES,
+  fallbackNames: Partial<S3EnvNames> | null = null,
+): string {
+  /** A variable counts as present when it, or the fallback it may inherit from, is set. */
+  const settled = (name: string, fallback: string | undefined): string | undefined =>
+    env[name]?.trim() || (fallback ? env[fallback]?.trim() : undefined);
+
+  const problems: string[] = [];
+  const endpoint = settled(names.endpoint, fallbackNames?.endpoint);
+  const bucket = settled(names.bucket, fallbackNames?.bucket);
+  const accessKeyId = settled(names.accessKeyId, fallbackNames?.accessKeyId);
+  const secretAccessKey = settled(names.secretAccessKey, fallbackNames?.secretAccessKey);
+
+  if (!endpoint) problems.push(names.endpoint);
+  else if (!isUsableEndpoint(endpoint)) problems.push(`${names.endpoint} (not an http(s) URL)`);
+  if (!bucket) problems.push(names.bucket);
+  if (!accessKeyId) problems.push(names.accessKeyId);
+  if (!secretAccessKey) problems.push(names.secretAccessKey);
+
+  const cfg = problems.length === 0 ? loadS3Config(env, names, fallbackNames) : null;
   if (cfg) {
-    const missing = ["STORAGE_ENDPOINT", "STORAGE_BUCKET", "STORAGE_ACCESS_KEY_ID", "STORAGE_SECRET_ACCESS_KEY"].filter(
-      (name) => !env[name]?.trim(),
-    );
-    // `missing` cannot be non-empty here (loadS3Config already required them); it is kept so the
-    // two branches cannot drift into disagreement about what "configured" means.
-    if (missing.length > 0) return `Bucket storage is not configured: ${missing.join(", ")} unset.`;
     return (
       `S3-compatible bucket ${cfg.bucket} at ${new URL(cfg.endpoint).host} ` +
       `(region ${cfg.region}${cfg.forcePathStyle ? ", path-style" : ""}` +
@@ -126,19 +191,7 @@ export function s3StatusDetail(env: NodeJS.ProcessEnv = process.env): string {
 
   // Every missing variable is named, not just the first: an operator who fixes one variable and
   // restarts to be told about the next has been given a slower way to read the same sentence.
-  const endpoint = env["STORAGE_ENDPOINT"]?.trim();
-  const bucket = env["STORAGE_BUCKET"]?.trim();
-  const accessKeyId = env["STORAGE_ACCESS_KEY_ID"]?.trim();
-  const secretAccessKey = env["STORAGE_SECRET_ACCESS_KEY"]?.trim();
-
-  const problems: string[] = [];
-  if (!endpoint) problems.push("STORAGE_ENDPOINT");
-  else if (!isUsableEndpoint(endpoint)) problems.push("STORAGE_ENDPOINT (not an http(s) URL)");
-  if (!bucket) problems.push("STORAGE_BUCKET");
-  if (!accessKeyId) problems.push("STORAGE_ACCESS_KEY_ID");
-  if (!secretAccessKey) problems.push("STORAGE_SECRET_ACCESS_KEY");
-
-  if (problems.length === 0) return "Bucket storage is not configured.";
+  if (problems.length === 0) problems.push(names.bucket);
   return `Bucket storage is not configured: ${problems.join(", ")} unset.`;
 }
 
@@ -270,7 +323,8 @@ export function deriveSigningKey(cfg: Pick<S3Config, "region" | "secretAccessKey
  * environment; the two public operations pass the one they loaded.
  */
 export function signRequest(args: {
-  method: "GET" | "PUT";
+  /** `DELETE` exists for the interop probe's own cleanup, not for the driver's two operations. */
+  method: "GET" | "PUT" | "DELETE";
   url: string;
   body: Uint8Array;
   now: Date;
@@ -337,18 +391,17 @@ export function signRequest(args: {
 // ---------------------------------------------------------------------------
 
 /**
- * Reads one object.
+ * Reads one object from a bucket whose configuration the caller already holds.
  *
- * `null` for a refused key, an incomplete configuration, a 404, a 403, any non-2xx, or a
- * transport failure. An empty object is `null` too, matching the local driver: an empty
- * `Uint8Array` would be indistinguishable from a real empty file to the caller.
+ * Exported so a second bucket (the audit anchor) can use the same signing without re-reading
+ * `STORAGE_*` and without a second implementation of SigV4.
  */
-export async function s3ReadObject(
+export async function s3Get(
+  cfg: S3Config,
   storageKey: string,
   options: { now?: Date } = {},
 ): Promise<Uint8Array | null> {
-  const cfg = loadS3Config();
-  if (!cfg || !isAcceptableKey(storageKey)) return null;
+  if (!isAcceptableKey(storageKey)) return null;
 
   try {
     const signed = signRequest({
@@ -368,19 +421,19 @@ export async function s3ReadObject(
 }
 
 /**
- * Writes one object.
+ * Writes one object to a bucket whose configuration the caller already holds.
  *
- * `false` for a refused key, an incomplete configuration or any non-2xx, and for a transport
- * failure. Nothing here retries: a proof upload is a user action with an answer of its own, and
- * the boot check is what stops a misconfigured driver from accepting writes it cannot complete.
+ * `false` for a refused key or any non-2xx, and for a transport failure. Nothing here retries: a
+ * proof upload is a user action with an answer of its own, and the boot check is what stops a
+ * misconfigured driver from accepting writes it cannot complete.
  */
-export async function s3WriteObject(
+export async function s3Put(
+  cfg: S3Config,
   storageKey: string,
   contents: Uint8Array,
   options: { now?: Date } = {},
 ): Promise<boolean> {
-  const cfg = loadS3Config();
-  if (!cfg || !isAcceptableKey(storageKey)) return false;
+  if (!isAcceptableKey(storageKey)) return false;
 
   try {
     const body = Buffer.from(contents);
@@ -400,4 +453,54 @@ export async function s3WriteObject(
   } catch {
     return false;
   }
+}
+
+/**
+ * Deletes one object (or returns `true` for a key that was never there — S3 answers `204`).
+ *
+ * Not part of the storage port: a proof or an invoice PDF is evidence and nothing deletes one.
+ * It exists for `scripts/storage-probe.ts`, so an interop check against a real bucket can take
+ * its own test objects away again instead of leaving litter in the owner's storage.
+ */
+export async function s3Delete(
+  cfg: S3Config,
+  storageKey: string,
+  options: { now?: Date } = {},
+): Promise<boolean> {
+  if (!isAcceptableKey(storageKey)) return false;
+
+  try {
+    const signed = signRequest({
+      method: "DELETE",
+      url: objectUrl(cfg, storageKey),
+      body: EMPTY_PAYLOAD,
+      now: options.now ?? new Date(),
+      config: cfg,
+    });
+    const response = await fetch(signed.url, { method: "DELETE", headers: signed.headers });
+    return response.ok || response.status === 204;
+  } catch {
+    return false;
+  }
+}
+
+/** The files bucket, read from the environment at call time. See `storage.ts` for the port. */
+export async function s3ReadObject(
+  storageKey: string,
+  options: { now?: Date } = {},
+): Promise<Uint8Array | null> {
+  const cfg = loadS3Config();
+  if (!cfg) return null;
+  return s3Get(cfg, storageKey, options);
+}
+
+/** The files bucket, read from the environment at call time. See `storage.ts` for the port. */
+export async function s3WriteObject(
+  storageKey: string,
+  contents: Uint8Array,
+  options: { now?: Date } = {},
+): Promise<boolean> {
+  const cfg = loadS3Config();
+  if (!cfg) return false;
+  return s3Put(cfg, storageKey, contents, options);
 }
