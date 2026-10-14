@@ -479,7 +479,14 @@ export async function issueRun(
     adjustments: BillingAdjustment[];
     runKey: string;
     triggeredBy: "owner" | "scheduler";
-    userId: string;
+    /**
+     * The user the run is attributed to, or `null` for the scheduled run.
+     *
+     * `billing_runs.started_by` and `invoices.created_by` both allow null, and the daily
+     * scheduler has no session: attributing a system run to a person would be a false record in
+     * the very table an audit reads (see `src/worker/jobs.ts`).
+     */
+    userId: string | null;
   },
 ): Promise<IssuedRun> {
   const { ctx, preview } = args;

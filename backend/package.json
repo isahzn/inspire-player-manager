@@ -10,8 +10,12 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev": "tsx watch src/server.ts",
+    "worker": "tsx src/worker/index.ts",
+    "worker:watch": "tsx watch src/worker/index.ts",
+    "worker:once": "tsx src/worker/index.ts --once",
     "build": "tsc -p tsconfig.build.json",
-    "start": "node dist/server.js",
+    "start": "node dist/src/server.js",
+    "start:worker": "node dist/src/worker/index.js",
     "openapi": "tsx scripts/generate-openapi.ts",
     "openapi:lint": "redocly lint ../api/openapi.yaml",
     "db:up": "tsx scripts/db.ts up",

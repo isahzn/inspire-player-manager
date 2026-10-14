@@ -338,7 +338,14 @@ export type GenerateInvoicePdfResult =
  */
 export async function generateInvoicePdf(
   client: PoolClient,
-  args: { invoiceId: string; userId: string; force: boolean; timezoneFallback: string; now?: Date },
+  args: {
+    invoiceId: string;
+    /** `null` for the background sweeper: `files.uploaded_by` allows it and no person did this. */
+    userId: string | null;
+    force: boolean;
+    timezoneFallback: string;
+    now?: Date;
+  },
 ): Promise<GenerateInvoicePdfResult> {
   const built = await buildInvoicePdfInput(client, args.invoiceId, args.timezoneFallback);
   if (!built) return { outcome: "not_found" };
@@ -537,7 +544,13 @@ export type GenerateReceiptPdfResult =
  */
 export async function generateReceiptPdf(
   client: PoolClient,
-  args: { receiptId: string; userId: string; timezoneFallback: string; now?: Date },
+  args: {
+    receiptId: string;
+    /** `null` for the background sweeper — see `generateInvoicePdf`. */
+    userId: string | null;
+    timezoneFallback: string;
+    now?: Date;
+  },
 ): Promise<GenerateReceiptPdfResult> {
   const built = await buildReceiptPdfInput(client, args.receiptId, args.timezoneFallback);
   if (!built) return { outcome: "not_found" };
