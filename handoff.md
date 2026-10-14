@@ -111,8 +111,15 @@ Nothing is deployed (though there is now a runbook to follow — §12); CI exist
    build on any skipped/pending/todo test, on a project that produced no files, or on a total below
    `scripts/tests-minimums.json` (260 tests / 27 files today). **The guard carries its own
    `--self-test`**, and it earned its place immediately: the self-test caught a bug in its own
-   fixture on the first run. What is *still* unobserved is the corrected pipeline — the second push
-   has not been watched to completion yet.
+   fixture on the first run. **The corrected pipeline has now been observed green on the runner**
+   (run #2, `f7c656a`, both jobs `success`): step 6 is the guard's self-test and step 14 is "Prove
+   the suite actually ran", both `success`, so the report CI produced contained at least 260 tests
+   across unit 7 / db 4 / integration 16 with nothing skipped. One caveat worth stating: **the
+   step's printed numbers could not be read back** — the job-log endpoint needs admin rights on this
+   repository — so this rests on the guard's own semantics (it fails on a missing, short or skipped
+   report, and it passed), not on seeing the line. The suite's own step takes 34 s on the runner
+   against 254 s on this Windows + OneDrive machine, which is the other reason the counts had to be
+   asserted rather than inferred from a duration.
 4. **The suite was flaky, and it was the harness.** Diagnosed and fixed this session (§9); two
    consecutive full runs are green since. Worth knowing because the failure mode looked like product
    breakage: logins answering 500 and `deadlock detected` out of `truncate`.
@@ -322,9 +329,8 @@ The four things worth carrying in your head:
   worth noting: the anchor's first implementation *did* inherit `STORAGE_BUCKET` — the corrected test
   failed and found it.## 10. Next steps, in order
 
-1. ~~**Push so CI runs once**~~ — **done.** CI is green, and the run now has to *prove* it ran the
-   suite (§3 item 3). **Watch the run after the guard's commit**: the guard is only trustworthy once
-   its corrected pipeline has been observed end to end on a runner.
+1. ~~**Push so CI runs once**~~ — **done, and the guard is live**: run #2 on `f7c656a` is green with
+   both the guard's self-test and the "prove the suite actually ran" step passing (§3 item 3).
 2. **Run `npm run storage:probe` and `npm run storage:probe -- --anchor` against the real bucket**
    before anything is deployed into it, and decide the provider (`OPEN-016`). The driver's interop is
    proven against a local S3 server; virtual-host addressing is not, and no production provider has
