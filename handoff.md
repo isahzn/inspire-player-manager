@@ -151,9 +151,13 @@ empty — that is owner item 2 in §5.
 Nothing here is a coding task. Every row has a safe default that is **already built**, so a developer
 can run the whole system today without any of it.
 
-1. **A phone number for a local OpenWA instance** — *the block*. Everything in M7 (21 endpoints) waits
-   on it. A spare/second phone is enough to start; the VPS and production number are only needed
-   before live verification.
+1. **A phone number for OpenWA — supplied 2026-10-14** (a test number; deliberately not written
+   into this repository). What M7 still waits on is a **home for the gateway**: the session must be
+   paired where OpenWA will live (the OpenWA VPS of DEPLOYMENT §2), because a session paired on a
+   developer machine dies with it and pairing twice is what trips WhatsApp's passkey gate. This
+   machine cannot host it either — `npm ci` needs a C++ toolchain for `better-sqlite3` and there is
+   no Docker, no Visual Studio and a OneDrive-synced working copy. **A VPS is now the block, not a
+   phone number.**
 2. **The academy's real details**: logo file, legal name, address, phone (`OPEN-001`), the real fee per
    group, and the **bank payment-instructions text** that prints on every invoice (`OPEN-018`).
 3. **The two sample bank receipts** — confirm `Receipt.pdf` / `anotherrecipt.pdf` are the right two and
@@ -167,9 +171,14 @@ can run the whole system today without any of it.
 6. **CR-003 approval in writing** — the coach clock-in dashboard block, the per-automation switches
    and "mobile is a shipping requirement" are built while `ADR-019` is still *Proposed*. Automations
    ship **off by default** until it is confirmed.
-7. Smaller release-gate items (retention periods, mandatory TOTP, the storage bucket decision
-   `OPEN-016`) — details in [`NEEDS_FROM_OWNER.md`](NEEDS_FROM_OWNER.md) §1.
-8. **A CI runner** — a remote to push to (or a self-hosted runner). Without it, gate item 1 stays
+7. **Storage: decided 2026-10-14 — it stays on the VPS, not a third-party bucket** (`OPEN-016`
+   resolved in that direction). The implementation choice is between the `local` driver in a
+   directory on the VPS and a MinIO container on the same box with `STORAGE_DRIVER=s3`; either way
+   the nightly off-host copy of proofs (DEPLOYMENT §7) remains mandatory, because a bucket on the
+   same machine is not a backup of that machine.
+8. Smaller release-gate items (retention periods with the accountant, mandatory TOTP) — details in
+   [`NEEDS_FROM_OWNER.md`](NEEDS_FROM_OWNER.md) §1.
+9. **A CI runner** — a remote to push to (or a self-hosted runner). Without it, gate item 1 stays
    unobservable no matter how good the workflow file is.
 
 ## 6. Standing permission — recorded at the owner's instruction
@@ -357,8 +366,8 @@ M9–M10 — checked against what the code actually is today.
 ### C. Only a person can supply these
 
 Dedicated phone number + VPS · a CI runner or a remote to push to · domain and TLS, and acceptance of
-RPO ≤ 15 min / RTO ≤ 4 h (OPEN-017) · the managed-Postgres-with-PITR and object-storage decision and
-its budget (OPEN-016) · **bank payment instructions and the real fee per group** (OPEN-018) · logo,
+RPO ≤ 15 min / RTO ≤ 4 h (OPEN-017) · **the VPS itself**, plus the managed-Postgres-with-PITR
+choice and its budget (storage is now decided: VPS-local, §5.7) · **bank payment instructions and the real fee per group** (OPEN-018) · logo,
 legal name, address (OPEN-001) · retention periods with an accountant (OPEN-009) · mandatory TOTP?
 (OPEN-010) · PDPA legal review and a published privacy notice (OPEN-019) · CR-003 approval in writing ·
 the real-device pass · the handover pack and owner training · the real player roster imported by CSV.
