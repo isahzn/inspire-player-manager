@@ -5,6 +5,21 @@
  * describes, so a change and its audit row commit or roll back together. The table is
  * append-only with a hash chain and the runtime role has INSERT + SELECT only.
  *
+ * **Every write is serialised on one lock.** The hash chain is extended by the
+ * `app.audit_logs_chain()` trigger, which reads the previous row's hash — and a plain read
+ * cannot see an uncommitted row, so two audited writes that overlap in time would both read
+ * "there is no previous row" and start a chain each. The result is a forked chain, which the
+ * nightly invariant job reports as a broken hash: a false alarm on any ordinary day, and a
+ * weakened guarantee every day. `record()` therefore takes the chain's advisory lock *before*
+ * its insert, so the row id is allocated inside the lock and its predecessor is committed and
+ * visible; `tests/db/audit-chain.test.ts` reproduces the fork and holds the fix in place.
+ *
+ * The cost is deliberate and small at this academy's volume: an audited write holds the lock
+ * until its transaction ends, so audited transactions run one at a time. A chain that can fork
+ * is not tamper evidence, so this is not a trade — the lock is what makes §3.7's claim true.
+ * Because it is transaction-scoped (`pg_advisory_xact_lock`), `record()` must be given a client
+ * that is **inside a transaction**, which the contract above already required.
+ *
  * Privacy: phone numbers in before/after are masked (SECURITY_AND_PRIVACY §3.5). The
  * masking lives here rather than at each call site so it cannot be forgotten.
  */
@@ -64,12 +79,24 @@ export function sanitizeForAudit(value: unknown, depth = 0): unknown {
   return out;
 }
 
+/**
+ * The advisory lock every audited write takes, named after the table so the two can never
+ * disagree. Hashed rather than written as a magic number: `pg_advisory_xact_lock` takes a
+ * `bigint`, and a readable key makes a lock collision with some future feature impossible to
+ * introduce by accident.
+ */
+const AUDIT_CHAIN_LOCK = "inspire-academy.audit_logs";
+
 /** Writes one audit row. Must be called with the transaction's client. */
 export async function record(
   client: AnyQueryable,
   ctx: AuditContext,
   entry: AuditEntryInput,
 ): Promise<void> {
+  // Taken before the insert, never after: the lock has to be held while the id is allocated and
+  // until this transaction commits, or the next writer cannot see the row it must chain onto.
+  await client.query("select pg_advisory_xact_lock(hashtext($1)::bigint)", [AUDIT_CHAIN_LOCK]);
+
   await client.query(
     `insert into audit_logs
        (actor_user_id, actor_role, action, entity_type, entity_id, before, after, reason, request_id, ip)
