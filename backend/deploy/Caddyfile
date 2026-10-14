@@ -1,18 +1,28 @@
 # Caddy for the Inspire Academy API (DEPLOYMENT_AND_OPERATIONS §2).
 #
-# NOT RUN ANYWHERE YET — this machine has no Docker. It is written and syntax-reasoned, not
-# executed. `caddy validate --config Caddyfile` on the VPS is the first real check, and it is
-# step 7 of docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md.
+# CURRENT STATE: HTTP-only on port 80.
 #
-# Only the API is proxied here. The frontend goes on a static/SSR host (Vercel, Cloudflare Pages)
-# at APP_HOST — DEPLOYMENT §2's recommendation — because the session cookie is `SameSite=Lax`
-# and works across origins only while both hosts share a registrable domain (`app.x.lk` +
-# `api.x.lk`). `COOKIE_DOMAIN` may stay empty: the API's cookie is host-only, which is the safer
-# setting and is sufficient for that arrangement.
+# The academy has no domain configured yet — no DNS A record pointing at this VPS and no
+# mailbox for Let's Encrypt notices — so this file deliberately has NO site hostname.
+# Caddy then serves plain HTTP and never attempts ACME. Pointing it at a hostname it
+# cannot validate made Caddy log a certificate failure every minute and answer every
+# request with a 308 to an HTTPS port that had no certificate.
+#
+# TO TURN HTTPS ON, once api.<domain> resolves to this VPS:
+#   1. set API_HOST and ACME_EMAIL in .env.production to the real values;
+#   2. replace the `:80 {` site address below with `{$API_HOST} {`;
+#   3. docker compose -f docker-compose.prod.yml --env-file .env.production --profile localdb up -d caddy
+#      — Caddy then obtains and renews the certificate itself. Nothing below that line changes.
+#
+# Only the API is proxied here. The frontend goes on a static/SSR host (Vercel, Cloudflare
+# Pages) at APP_HOST — DEPLOYMENT §2's recommendation — because the session cookie is
+# `SameSite=Lax` and works across origins only while both hosts share a registrable domain
+# (`app.x.lk` + `api.x.lk`). `COOKIE_DOMAIN` may stay empty: the API's cookie is host-only,
+# which is the safer setting and is sufficient for that arrangement.
 
 {
+	# Used only once a hostname site exists; harmless (and unused) over plain HTTP.
 	email {$ACME_EMAIL}
-	# Automatic HTTPS with Let's Encrypt is on by default for a site block with a hostname.
 	log {
 		# stdout, so `docker compose logs -f caddy` is the one place to look and Docker's
 		# json-file driver does the rotation. A file inside the container would be a second,
@@ -21,8 +31,8 @@
 	}
 }
 
-# API_HOST is the full hostname, e.g. api.your-academy.lk.
-{$API_HOST} {
+# Was `{$API_HOST} {` — see the HTTPS note at the top of this file.
+:80 {
 	encode zstd gzip
 
 	log {

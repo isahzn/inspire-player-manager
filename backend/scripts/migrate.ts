@@ -149,7 +149,12 @@ export async function seed(): Promise<void> {
   }
 }
 
-const isMain = process.argv[1]?.replace(/\\/g, "/").endsWith("scripts/migrate.ts");
+// Matches both `tsx scripts/migrate.ts` (dev) and `node dist/scripts/migrate.js`
+// (the image, DEPLOYMENT runbook §7.3). Testing only for the `.ts` path made the
+// compiled runner exit 0 having applied nothing — a silent no-op.
+const isMain = /(^|\/)scripts\/migrate\.(ts|js)$/.test(
+  process.argv[1]?.replace(/\\/g, "/") ?? "",
+);
 if (isMain) {
   const wantsSeed = process.argv.includes("--seed");
   try {

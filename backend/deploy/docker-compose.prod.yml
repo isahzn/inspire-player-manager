@@ -81,8 +81,9 @@ services:
       db:
         condition: service_healthy
         required: false
-    # The image already declares a /health HEALTHCHECK; `depends_on` cannot wait on it, so Caddy
-    # is what actually gates traffic — it returns 502 until the API answers.
+    # The image already declares an `/api/v1/health` HEALTHCHECK (a bare `/health` is a 404 —
+    # the router mounts every contract route under `/api/v1`); `depends_on` cannot wait on it,
+    # so Caddy is what actually gates traffic — it returns 502 until the API answers.
     stop_grace_period: 30s
 
   worker:

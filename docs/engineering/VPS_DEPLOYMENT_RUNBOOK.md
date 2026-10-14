@@ -154,7 +154,7 @@ Every line below matters; lines not listed keep `.env.example`'s value, which is
 | `API_BASE_URL` | `https://api.<domain>` | **the hostname inside every guardian's invoice link** (`PUB-01`) |
 | `CORS_ALLOWED_ORIGINS` | `https://app.<domain>` | exact origins only; the API never accepts `*` |
 | `TRUST_PROXY` | **`true`** | Without it the API cannot see the client IP behind Caddy, and the rate limiter's 300 req/min becomes **one shared budget for every user at once**. This is the single most likely thing to be wrong. |
-| `COOKIE_SECURE` | `true` | defaults to `true` when `NODE_ENV=production`; set it explicitly |
+| `COOKIE_SECURE` | `true` | defaults to `true` when `NODE_ENV=production`; set it explicitly. **`false` only while the site is plain HTTP**: a browser drops a `Secure` cookie over HTTP, so login appears to succeed and the very next request is unauthenticated (handoff §12.5). It goes back to `true` the moment TLS is on |
 | `COOKIE_DOMAIN` | *(empty)* | host-only cookies are the safer setting and are sufficient, because `app` and `api` share a registrable domain |
 | `ACADEMY_TIMEZONE_DEFAULT` | `Asia/Colombo` | seed default; changing it later does not re-schedule anything |
 | `POSTGRES_SUPERUSER` / `POSTGRES_SUPERUSER_PASSWORD` / `POSTGRES_DB` | the superuser name, its password, and `ia_prod` | read by the `db` container only (step 6's `localdb` profile) |
@@ -244,12 +244,15 @@ $C run --rm --entrypoint caddy caddy validate --config /etc/caddy/Caddyfile
 $C --profile localdb up -d
 
 # 8.3 Readiness, not just liveness.
-curl -fsS http://127.0.0.1:3200/health    # → 200, process up
-curl -fsS http://127.0.0.1:3200/ready     # → 200, and it ran a real `select 1`
-sleep 20 && curl -fsS https://api.<domain>/health   # → 200 through TLS
+# The router mounts every contract route under /api/v1, so the paths carry that prefix:
+# a bare /health is a 404 that looks like a broken deployment. (This was wrong in the first
+# version of this runbook, and the image's HEALTHCHECK asked for /health too — handoff §12.1.)
+curl -fsS http://127.0.0.1:3200/api/v1/health    # → 200, process up
+curl -fsS http://127.0.0.1:3200/api/v1/ready     # → 200, and it ran a real `select 1`
+sleep 20 && curl -fsS https://api.<domain>/api/v1/health   # → 200 through TLS
 ```
 
-If `/ready` fails, the startup log says which check refused — `assertRuntimeRoleIsUnprivileged`
+If `/api/v1/ready` fails, the startup log says which check refused — `assertRuntimeRoleIsUnprivileged`
 (ia_app must not be superuser or BYPASSRLS) is the usual one, and it means step 7.2 did not run.
 
 ## 9. Create the first owner, and turn TOTP on
@@ -345,12 +348,13 @@ afterwards. A backup that has never been restored is not a backup.
 
 | Signal | Where | Alert on |
 |---|---|---|
-| API up | external pinger on `https://api.<domain>/health` | 2 consecutive failures |
-| API ready (DB reachable) | pinger on `https://api.<domain>/ready` | any failure |
-| Worker alive | `scheduler.lastRunAt` in `/system/health` | older than 15 min |
+| API up | external pinger on `https://api.<domain>/api/v1/health` | 2 consecutive failures |
+| API ready (DB reachable) | pinger on `https://api.<domain>/api/v1/ready` | any failure |
+| Worker alive | `scheduler.lastRunAt` in `GET /api/v1/system/health` | older than 15 min |
 | Disk | the VPS provider's alert | > 80 % |
 | TLS expiry | Caddy renews automatically; note the date | 14 days out |
-| Nightly invariant job | `ops.invariant_nightly` in `/system/health` | any run not `ok` |
+| Nightly invariant job | `ops.invariant_nightly` in `GET /api/v1/system/health` | any run not `ok` |
+| Nightly logical backup | `backup.status` in `GET /api/v1/system/health` | any run not `ok` — and read §12a again before believing a dump file exists |
 
 `SENTRY_DSN` is not wired, so there is **no** error tracking and no metrics beyond the logs:
 `docker compose logs -f api worker`. The audit trail (`AUD-01`) and `SYS-03` are the in-product
@@ -358,8 +362,22 @@ signals, and they are real.
 
 ## 14. What this deployment still does not do
 
-Restating §0, because a working deployment makes these easy to forget:
+Restating §0, because a working deployment makes these easy to forget. The first three are what the
+**first real deployment** (2026-10-14, handoff §12) actually hit:
 
+- **Nothing routes to the box from the internet.** The provider NATs a *shared* public IP and has
+  forwarded only SSH. Its own edge proxy answers 80/443 for every customer on that IP, so this VM's
+  Caddy listens and is never reached. Check with `curl -I http://<public-ip>/` **from outside** — if
+  the answer is a Go `404 page not found` or a `TRAEFIK DEFAULT CERT`, you are seeing the provider,
+  not this deployment. Fix it by asking the provider for two forwarded ports, buying a dedicated IP,
+  or putting a Cloudflare Tunnel in front (handoff §5).
+- **TLS is off, by instruction**, and `ACME_EMAIL` is a placeholder, because the academy has neither a
+  domain nor a mailbox yet. §3 and §6b's HTTPS steps are written and unrun; the switch is one line in
+  `backend/deploy/Caddyfile` plus two values in `.env.production`.
+- **The nightly dump does not complete.** `pg_dump` is in the image, but a full dump of an RLS
+  database needs a role exempt from RLS and both roles are deliberately forbidden `BYPASSRLS`. The job
+  records `failed` and **leaves no file**, so §12a's `ls` will show an empty directory — that is the
+  honest reading, not a broken mount (handoff §5, §12.4).
 - **No WhatsApp.** Messages are recorded, not sent.
 - **No guardian invoice links sent by message** — `PUB-01` works, so copy the URL from the invoice
   and send it yourself.
@@ -378,7 +396,7 @@ cd /opt/inspire/src/backend/deploy
 sed -i 's/^IA_IMAGE=.*/IA_IMAGE=ia-backend:<previous-sha>/' .env.production
 C="docker compose -f docker-compose.prod.yml --env-file .env.production"
 $C --profile localdb up -d api worker
-curl -fsS http://127.0.0.1:3200/ready
+curl -fsS http://127.0.0.1:3200/api/v1/ready
 ```
 
 Migrations are expand-only, so old code runs against a newer schema. **There is no maintenance flag
@@ -398,7 +416,7 @@ cd deploy
 C="docker compose -f docker-compose.prod.yml --env-file .env.production"
 $C --profile localdb run --rm --entrypoint node api dist/scripts/migrate.js   # before the new code
 $C --profile localdb up -d api worker
-curl -fsS http://127.0.0.1:3200/ready
+curl -fsS http://127.0.0.1:3200/api/v1/ready
 docker compose -f docker-compose.prod.yml logs --since 5m api worker | grep -i error
 ```
 

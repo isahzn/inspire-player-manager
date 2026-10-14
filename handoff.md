@@ -1,9 +1,9 @@
 # handoff.md — read this one first
 
-> **Updated:** 2026-10-14 (third backend session of the day: the repository is pushed and CI has run,
-> a green run now has to prove the tests ran, the image can finally migrate, and the VPS runbook
-> exists) · **Owner granted standing permission** (§6) — ordinary development, local infrastructure
-> and commits need no further approval.
+> **Updated:** 2026-10-14 (fourth session of the day: **the backend is deployed and running on the
+> VPS** — §2 has the measured state, §12 the session, §5 the two things that now block real use) ·
+> **Owner granted standing permission** (§6) — ordinary development, local infrastructure and
+> commits need no further approval.
 >
 > This file is the whole picture: what works, what is broken, what only a person can supply, and the
 > exact next actions. The milestone records live in
@@ -18,14 +18,16 @@
 
 ## 1. Goal
 
-Four things, in this order, with the fourth deliberately not started:
+**Deploy the backend to the VPS by running the runbook that had never been run.** The previous
+session wrote [VPS_DEPLOYMENT_RUNBOOK.md](docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md) and said so
+plainly, in the compose header and in §12: nothing in it had ever been started. The goal was to run
+it on the real box, end to end, and to **fix whatever a first real run exposed rather than route
+around it**. Four defects in that never-run path were found and fixed (§12); the deployment is up.
 
-1. Commit the **46 uncommitted paths** (the entire M2–M6 backend and the invoice tools) as clean
-   atomic commits.
-2. Build **M8's five remaining endpoints**: `DSH-01`, `RPT-01`, `RPT-02`, `AUD-01`, `SYS-03`.
-3. Build the **production plumbing M7 and M10 both need**: a worker process with the scheduled jobs,
-   a real storage adapter, the nightly invariant job, retention/purge, a `Dockerfile`, and CI.
-4. **Not** write anything against guessed OpenWA behaviour — M7 is blocked on a phone number (§5.1).
+One instruction arrived while it ran, from the owner: **stay HTTP-only for now** — the academy has
+no domain and no mailbox for Let's Encrypt, so the ACME email is a placeholder and the site is plain
+HTTP on `:80`, with the HTTPS switch documented inline in
+[the Caddyfile](backend/deploy/Caddyfile).
 
 ## 2. Current state — measured, not assumed
 
@@ -45,11 +47,17 @@ Four things, in this order, with the fourth deliberately not started:
 | Commits | **11 atomic commits** for M2–M8, then this session's CI-guard commit; the tree holds no source changes, and the two sample receipts stay untracked on purpose (§5.3) |
 | The worker, run for real | `npm run worker:once` exit 0, then `job_runs`/`worker_heartbeats` **read back out of the database**: five daily jobs `ok`, `ops.logical_backup skipped` (no `BACKUP_DIR`), and **nothing re-claimed that had already succeeded** — the `(job, run_key)` idempotency observed, not asserted |
 | The nightly invariant job, run for real on a chain with the anchor configured | **`ops.invariant_nightly ok`**, 3 audit rows checked, `auditChainBroken: 0`, `anchorStatus: uploaded` — and the uploaded object's `headHash` **equals** the chain head read back from the database (§3) |
+| **The deployment itself, on the VPS** | **Running.** `ia_db`, `ia_api`, `ia_worker` all `healthy` and `ia_caddy` up, HTTP-only on `:80`. 17 migrations applied, seed applied, and the database holds **exactly one user — the owner, `invited`, with a live 72 h invite**. `GET /api/v1/health` → `200 {"status":"ok"}`; an unauthenticated `GET /api/v1/users` → **401 `UNAUTHENTICATED` with a `requestId`** (the real router, not a 404) (§12) |
+| **Login over plain HTTP** | **Verified end to end** with a throwaway active coach, over the forwarded SSH port: `POST /api/v1/auth/login` → 200 and `Set-Cookie: ia_session=…; Path=/; HttpOnly; SameSite=Lax` — **no `Secure`**, because `COOKIE_SECURE=false` for the HTTP-only pilot — then `GET /api/v1/auth/me` → **200 with the cookie and 401 without it**. The throwaway account was deleted afterwards and the database is back to one row (§12) |
+| **Reaching the API from the internet** | **Not possible yet.** The VM sits behind the provider's NAT (`enp16s0 192.168.122.24`, egress `93.127.141.71`) and only **SSH/10057** is forwarded to it: public 80/443 are answered by **DatabaseMart's own Traefik** (`CN=TRAEFIK DEFAULT CERT`, Go `404 page not found`), which has no router for this box. Internally the paid-for stack is correct — `http://127.0.0.1/api/v1/health` → 200 through our own Caddy (§5) |
+| **The nightly logical backup** | **Still fails, loudly and correctly.** `pg_dump` is in the image now (16.15, matching the v16 server), but the dump dies partway: pg_dump sets `row_security = off` and these tables are **FORCE ROW LEVEL SECURITY**, so only a superuser or a `BYPASSRLS` role can read them — and `ia_migrator`/`ia_app` are both deliberately forbidden `BYPASSRLS` (§5). `job_runs` records `failed` and **no file is left behind**, which is the honest state rather than a truncated dump (§12) |
 
 Endpoint progress: **M2 23/23 · M3 31/31 · M4 19/19 · M5 26/26 · M6 9/9 · M7 0/21 · M8 6/6.**
 
-Nothing is deployed (though there is now a runbook to follow — §12); CI exists and has run green twice
-(§3 item 3), and the second run has to prove the tests ran rather than merely pass.
+**A backend is deployed now** — a VPS, a database, a worker and a reverse proxy, all running, with
+the first owner invited. What that does *not* yet mean: nobody can reach it from the internet (§5),
+the frontend is not deployed, TLS is off by the owner's instruction, and the nightly backup does not
+complete (§2). CI still has to prove the tests ran rather than merely pass (§3 item 3).
 
 ## 3. What works, what is broken, what needs fixing
 
@@ -171,13 +179,33 @@ empty — that is owner item 2 in §5.
 Nothing here is a coding task. Every row has a safe default that is **already built**, so a developer
 can run the whole system today without any of it.
 
+**New this session — the two things now standing between the deployment and real use:**
+
+- **Nothing routes to this VM from the internet.** The provider NATs a *shared* public IP and has
+  forwarded **only SSH/10057**. Its edge is a Traefik instance that owns 80/443 for the whole shared
+  IP, so the Caddy container here can listen on 80 and 443 and still be unreachable. Three ways out,
+  each needing a person: **(a)** ask the provider to forward two more ports (e.g. public 8080/8443 →
+  this VM's 80/443) — cheapest, and needs no DNS; **(b)** take a dedicated IP so the provider's edge
+  stops intercepting; **(c)** a domain plus a **Cloudflare Tunnel**, which needs no inbound port at
+  all and would give real HTTPS on `app.`/`api.` hostnames. Until one is chosen the stack is
+  reachable only through an SSH tunnel — enough for the owner to look at it, not enough for anyone
+  else.
+- **A decision: which role takes the nightly dump.** A full logical dump of an RLS database has to
+  come from a role that is *exempt* from RLS, because `pg_dump` sets `row_security = off` by design
+  and cannot be talked out of it. Both current roles are forbidden `BYPASSRLS` on purpose
+  (`db/bootstrap.sql`, `migrations/0016`), so the choice is either a **dedicated `ia_backup` role
+  with `BYPASSRLS` + `pg_read_all_data`**, used only by the dump (**recommended** — least
+  privilege), or pointing the dump at the **superuser** URL (smallest change, but the worker
+  container would then hold credentials that can read every database and the filesystem). Recorded
+  rather than chosen: it is a security decision in a system that handles money.
+
 1. **A phone number for OpenWA — supplied 2026-10-14** (a test number; deliberately not written
    into this repository). What M7 still waits on is a **home for the gateway**: the session must be
    paired where OpenWA will live (the OpenWA VPS of DEPLOYMENT §2), because a session paired on a
    developer machine dies with it and pairing twice is what trips WhatsApp's passkey gate. This
    machine cannot host it either — `npm ci` needs a C++ toolchain for `better-sqlite3` and there is
-   no Docker, no Visual Studio and a OneDrive-synced working copy. **A VPS is now the block, not a
-   phone number.**
+   no Docker, no Visual Studio and a OneDrive-synced working copy. **That VPS now exists (§2), so the gateway
+   has a home — pairing the session on it is what M7 now waits on.**
 2. **The academy's real details**: logo file, legal name, address, phone (`OPEN-001`), the real fee per
    group, and the **bank payment-instructions text** that prints on every invoice (`OPEN-018`).
 3. **The two sample bank receipts** — confirm `Receipt.pdf` / `anotherrecipt.pdf` are the right two and
@@ -218,6 +246,14 @@ done, you have permission."* Recorded as:
   substitutes for them, which is why §5 exists.
 
 ## 7. Active files
+
+**Fourth session of 2026-10-14 (the deployment)** — new:
+`backend/migrations/0017_owner_invariant_bootstrap.sql`. Modified: `backend/Dockerfile` (`pg_dump` —
+§12.3), `backend/src/worker/jobs.ts` (a failed dump no longer leaves a truncated file — §12.4),
+`backend/scripts/migrate.ts` (the `isMain` guard — §12.2), `backend/deploy/Caddyfile` (HTTP-only,
+with the HTTPS switch and why), `backend/deploy/docker-compose.prod.yml` (a stale `/health` comment),
+and this file. **On the VPS only, never in git:** `backend/deploy/.env.production` — the secrets, and
+`COOKIE_SECURE=false` for the HTTP-only pilot, with the reason written beside it.
 
 **Third session of 2026-10-14** — new: `backend/scripts/assert-test-report.mjs`,
 `backend/scripts/tests-minimums.json`, `backend/deploy/docker-compose.prod.yml`,
@@ -266,6 +302,12 @@ The four things worth carrying in your head:
   the next tick, and one that already succeeded cannot run twice.
 - **A skipped job records `skipped`, not `ok`.** A backup that never ran must not read as healthy.
 - **The orphan sweeper reports, never deletes.** A file row is evidence of what was submitted.
+
+**This session (the deployment): four defects in a path nobody had ever run, fixed at the cause** —
+the `LAST_OWNER` invariant that made the academy's first owner impossible to create (`0017`), the
+`migrate.ts` guard that turned the documented migrate command into a silent no-op, the `HEALTHCHECK`
+that probed a path the router does not serve, and a failed `pg_dump` that left a truncated archive
+looking exactly like a backup. §12 has each one with the evidence that found it.
 
 ## 9. Failed attempts (so they are not repeated)
 
@@ -327,10 +369,38 @@ The four things worth carrying in your head:
   anchor's own variables, so the machine's `.env` supplied `STORAGE_*` and the "does not inherit the
   files bucket" assertion passed against a fallback it did not have. It now clears both sets. Also
   worth noting: the anchor's first implementation *did* inherit `STORAGE_BUCKET` — the corrected test
-  failed and found it.## 10. Next steps, in order
+  failed and found it.
 
-1. ~~**Push so CI runs once**~~ — **done, and the guard is live**: run #2 on `f7c656a` is green with
-   both the guard's self-test and the "prove the suite actually ran" step passing (§3 item 3).
+**Fourth session (the deployment):**
+
+- **An SSH tunnel started in the foreground hangs the tool, not the tunnel.** `ssh -N -L …` never
+  returns, so a synchronous command times out *after* the tunnel is up and working. Start it as a
+  background process, curl through it, then stop it — and note that `taskkill /IM ssh.exe` kills
+  every tunnel on the machine, not just the one.
+- **The deploy directory is not the repository root.** `docker-compose.prod.yml` and
+  `.env.production` live in `/opt/inspire/src/backend/deploy`; a diagnostic that `cd`-ed two levels
+  short printed an empty environment and looked like a missing env file. A path that works locally is
+  a guess on a server.
+- **`pg_dump` refuses a server newer than itself**, and Debian bookworm ships only client 15 while
+  `bookworm-backports` carries no 16 — so the client has to come from PGDG (`apt.postgresql.org`).
+  A plain `apt-get install postgresql-client` builds an image that starts, runs overnight, and then
+  aborts on the dump.
+- **A grep that found nothing because of a backtick.** `` `/api/v1/health` `` in a comment does not
+  match the pattern `api/v1/health ` (there is a backtick between the two), so a correct edit read as
+  an unapplied one. A failed grep is evidence about the pattern at least as often as about the file.
+- **A failed daily job retries every tick.** `claimJobRun` re-claims any row whose status is not `ok`,
+  so `ops.logical_backup` was retried **every 15 seconds** and wrote one truncated dump per attempt.
+  Right for a transient failure, expensive for a permanent one — and the reason §12.4 mattered.
+
+## 10. Next steps, in order
+
+1. ~~**Push so CI runs once**~~ — **done** (run #2 on `f7c656a` green, guard live), and **the VPS
+   deployment is done too** (§2). Its own next steps, in order: **(a)** choose how the VM becomes
+   reachable (§5) and set `APP_BASE_URL` / `API_BASE_URL` / `CORS_ALLOWED_ORIGINS` to the real host;
+   **(b)** decide the dump role (§5) and re-run the backup until `job_runs` says `ok`;
+   **(c)** deploy `frontend/` and turn `NEXT_PUBLIC_USE_MOCKS` off; **(d)** give the owner the invite
+   link so they set their own password and turn TOTP on (runbook step 9); **(e)** turn HTTPS on by
+   changing one line in the Caddyfile and putting `COOKIE_SECURE=true` back.
 2. **Run `npm run storage:probe` and `npm run storage:probe -- --anchor` against the real bucket**
    before anything is deployed into it, and decide the provider (`OPEN-016`). The driver's interop is
    proven against a local S3 server; virtual-host addressing is not, and no production provider has
@@ -361,7 +431,7 @@ M9–M10 — checked against what the code actually is today.
 | # | Gate | State today |
 |---|---|---|
 | 1 | CI green on the release commit | **Ran, green, and now forced to be honest about it.** `.github/workflows/ci.yml` runs typecheck, build, contract generation + lint, the full suite against a real PostgreSQL, and the documentation tools; two runs exist on `origin/master`, both green. The second push added `assert-test-report.mjs`, which refuses a short or skipped run — a green run now *proves* it ran 260 tests in 27 files, not merely that it exited 0. The suite is green locally too: 260/260, exit 0 |
-| 2 | E2E smoke on staging (login, register, attendance, clock in/out, billing run, payment + receipt, `PRF-04` queue, WhatsApp via mock, void) | **Not possible — nothing is deployed, there is no staging** |
+| 2 | E2E smoke on staging (login, register, attendance, clock in/out, billing run, payment + receipt, `PRF-04` queue, WhatsApp via mock, void) | **Partly, and for the first time not "impossible": there is a real deployment now (§2)**. Health, login, the session cookie over HTTP and the 401s were walked by hand against the running box. The rest need the deployed frontend, which does not exist yet, so the item stays open |
 | 3 | T-FIL-09 and T-MSG-02/03/06 pass | T-FIL-09 **passes**; **every T-MSG row is blocked** (M7 unbuilt) |
 | 4 | OpenWA spike S1 (O18–O22) + T-MSG-12 on the real number | **Not started** — needs the number (§5.1) |
 | 5 | Accessibility + real-device mobile checklist signed off | **Not done** — M9; needs the owner's phone |
@@ -381,8 +451,11 @@ M9–M10 — checked against what the code actually is today.
    production provider. The bucket/provider decision (`OPEN-016`) is still the owner's, and the
    probe is on the go-live checklist so this cannot be taken on trust.
 3. ~~No immutable image and no deploy artefacts~~ — **a `Dockerfile`** (one image, two entrypoints,
-   non-root, no secrets, a `/health` `HEALTHCHECK`) and **a CI workflow**. Still missing: reverse-proxy
-   and TLS config, and the **maintenance flag** the documented rollback path (b) needs.
+   non-root, no secrets) and **a CI workflow**, plus, as of this session, **a reverse proxy that
+   actually runs**: `backend/deploy/Caddyfile` in the compose stack, with TLS deliberately off and
+   the switch written down. The liveness path is `/api/v1/health`, **not `/health`** — a bare
+   `/health` is a 404 on the real router, which is exactly what the old `HEALTHCHECK` asked for
+   (§12.1). Still missing: the **maintenance flag** the documented rollback path (b) needs.
 4. ~~No invariant job~~ — **built** (`ops.invariant_nightly`): invoice arithmetic, allocations, orphan
    counts and the **audit hash chain**, re-anchored nightly — and the anchor now **uploads to
    `AUDIT_ANCHOR_BUCKET`**, so the nightly verification leaves the database it attests to.
@@ -401,10 +474,12 @@ the real-device pass · the handover pack and owner training · the real player 
 
 ### D. The shortest honest path
 
-1. **Push** so CI runs once (the commit is done). Nothing can be released cleanly from an unobserved
-   pipeline.
-2. **Prove the S3 driver against the real provider** (`npm run storage:probe`, `-- --anchor`), and
-   decide the bucket (`OPEN-016`).
+1. ~~**Push** so CI runs once~~ — **done**, and so is the **first real deployment** (§2). What is
+   left of this step is not code: make the VM reachable (§5), set the base URLs and CORS to the real
+   host, and fix the dump role (§5).
+2. **Prove the S3 driver against the real provider** (`npm run storage:probe`, `-- --anchor`) — still
+   open, but no longer on the critical path: the pilot runs `STORAGE_DRIVER=local` on the VPS
+   (§5.7), so the live question is the **off-host copy of proofs**, not the driver.
 3. **M7** the moment the number arrives — spike S1 first, per the plan.
 4. **M9:** performance sanity, security review, accessibility, the real-device pass, a bug bash on
    anonymised real data.
@@ -421,7 +496,100 @@ worker (built), managed Postgres, the frontend pointed at the real API (it alrea
 one backup **with a tested restore**, `create-owner` + TOTP, and the owner's real fees and bank
 details. **Guardian-facing automation is the expensive half, not the money engine.**
 
-## 12. This session — the push, the guard, and two real defects
+## 12. This session — the deployment, and the four defects it exposed
+
+**What was asked:** run the VPS runbook the previous session had written but never run. What follows
+is what a first real run found, against a real PostgreSQL 16, real Docker, and a network that turned
+out to sit behind the provider's NAT.
+
+### 12.0 The deployment, as it now stands
+
+| | |
+|---|---|
+| Box | `/opt/inspire/src` — the repo cloned on the VPS, run from `backend/deploy` |
+| Containers | `ia_db` (postgres:16-alpine), `ia_api`, `ia_worker` (one image, `ia-backend:prod`) and `ia_caddy` — all up, the first three `healthy` |
+| Database | roles bootstrapped from `db/bootstrap.sql`, **17 migrations** applied, seed applied (`academy_settings` = "Inspire Academy" / `Asia/Colombo`) |
+| Users | **one** — the owner, `invited`, with a live 72 h invite |
+| Reached by | nothing public yet (§5); `http://127.0.0.1/…` on the box itself, and an SSH tunnel for me |
+
+Three things to know before touching it. It was **reinitialised once**, because my own invariant
+tests had left four junk owner rows in it — a brand-new production database must not carry test
+pollution, and the clean re-init then ran the runbook's commands as written, which was the point. The
+`db` service carries `profiles: ["localdb"]`, so **every** compose command needs `--profile localdb`
+or Compose answers `service "worker" depends on undefined service "db"`. And the repository on the
+box was **root-owned** (cloned under `sudo`), which is why the first `scp` of a fix landed nowhere.
+
+### 12.1 `HEALTHCHECK` probed a path that does not exist
+
+The Dockerfile asked for `/health`, and the runbook's step 10 says the same. The router mounts every
+contract route under `/api/v1`, so `/api/v1/health` is the endpoint (`SYS-01`) and `/health` is a
+**404**: the container would have reported `unhealthy` forever while serving perfectly, and an
+operator would have gone looking for a fault that was not there.
+
+### 12.2 The documented migrate command did nothing, silently
+
+`scripts/migrate.ts` guards `main()` with `process.argv[1].endsWith("scripts/migrate.ts")`. That
+matches when run through `tsx` and **never** matches the compiled `dist/scripts/migrate.js` the
+runbook calls through `--entrypoint node` — so the deployment's migration step exited **0 having done
+nothing**. The guard now compares `pathToFileURL(process.argv[1]).href`, the same fix
+`worker/index.ts` needed in an earlier session.
+
+### 12.3 The first owner could not be created — an invariant conflict, not an operator error
+
+`create-owner` inserts the first owner as **`invited`** — they set their own password from a 72 h
+single-use link (DEPLOYMENT §9.2). The 0002/0006 `LAST_OWNER` invariant demanded an **`active`** owner
+on *every* write to `users`, **deferred to COMMIT**. On a fresh database with no owner yet, the
+bootstrap therefore died with `23514: at least one active owner must exist (LAST_OWNER)`. The academy
+could never have had a first owner, and the failure looked like a bug in `create-owner`.
+
+`migrations/0017_owner_invariant_bootstrap.sql` redefines the check to fire on what it guards: an
+**INSERT can never remove the last active owner**, and only a row that **was** an active owner can be
+lost. The advisory lock and the deferred SECURITY DEFINER evaluation are unchanged from 0006.
+**T-AUTH-07 still holds** — verified by trying to demote the last active owner, which still raises
+`LAST_OWNER`.
+
+### 12.4 A failed `pg_dump` left a backup-shaped file
+
+First the missing binary: the job spawns `pg_dump` and the slim image has no PostgreSQL client, so
+runbook step 12a's "the worker already writes one nightly" was `spawn pg_dump ENOENT`. The client has
+to match the server's major version (`pg_dump` refuses a newer server), so it comes from PGDG —
+Debian bookworm has only 15 and `bookworm-backports` has no 16 — and the repo and its key are removed
+again after the install.
+
+Then the job failed *later*, and worse. `pg_dump` sets `row_security = off`; these tables are
+**FORCE ROW LEVEL SECURITY** on purpose (`0016`); so it died inside `academy_settings` **after writing
+182 KB of archive**. And `claimJobRun` re-claims any run whose status is not `ok`, so that became **a
+new truncated dump every 15 seconds**, in the exact directory runbook step 12a tells the operator to
+trust.
+
+The job now removes the partial file before it throws: **a missed backup has to look like a missed
+backup, not like a backup.** Verified by emptying the directory and watching two ticks leave it at
+**zero files**, with `job_runs` still honestly recording `failed`. **No automated test covers this** —
+the only failure that leaves a file needs a real `pg_dump` against a table the dumping role cannot
+read, which the suite has no way to guarantee on a machine that may not have `pg_dump` at all.
+
+**The dump itself is not fixed, and cannot be fixed in code:** a full logical dump of an RLS
+database must come from a role exempt from RLS, and both roles are deliberately forbidden
+`BYPASSRLS`. That is §5's decision, recorded rather than taken.
+
+### 12.5 HTTP-only, and the cookie that would have broken it
+
+The instruction was to stay HTTP-only until there is a domain and a mailbox, so the Caddyfile has no
+site hostname — pointed at one it could not validate, Caddy logged a certificate failure every minute
+and answered everything with a 308 to an HTTPS port with no certificate — and `ACME_EMAIL` stays a
+placeholder.
+
+That exposed something else: `.env.production` carried `COOKIE_SECURE=true` (the production
+default), and **a `Secure` cookie is discarded by a browser over plain HTTP** — so login would have
+appeared to succeed and the very next request would have been unauthenticated. Set to `false` for the
+pilot, with the reason and the flip-back written beside it in the file.
+
+Verified the way a browser would, over the tunnel: `POST /api/v1/auth/login` → **200**,
+`Set-Cookie: ia_session=…; HttpOnly; SameSite=Lax` with **no `Secure`**, then `GET /api/v1/auth/me` →
+**200 with the cookie and 401 without it**. The throwaway active coach used for that was deleted
+afterwards; the database holds one user again.
+
+## 13. Previous session — the push, the guard, and two real defects
 
 **What was asked:** push everything except WhatsApp to
 `https://github.com/isahzn/inspire-player-manager.git`, then explain how to get it onto a VPS.
@@ -454,16 +622,17 @@ third-party key. The three required secrets are `SESSION_COOKIE_SECRET`, `CSRF_S
 `.env.example` are read by **nothing** — worth deleting from the template so nobody sets them
 believing an account will appear.
 
-**The two deploy artefacts are unrun.** This machine has no Docker, so `docker-compose.prod.yml`
-and `Caddyfile` are written and YAML-parsed (`compose parses OK` — services `db, api, worker, caddy`)
-but have never been started. `caddy validate` on the VPS is their first real check (runbook step 8.1).
+**The two deploy artefacts were unrun when this was written — they have since been started.** This
+machine has no Docker, so `docker-compose.prod.yml` and `Caddyfile` were written and YAML-parsed only.
+The next session ran both on the VPS (§12). The note is kept because it is what the runbook's honesty
+rests on, not because it is still true.
 
-### The one-line version
+### The one-line version (updated 2026-10-14, fourth session)
 
 Money, documents, the dashboard, the reports, the audit trail and the system page all work and are
-tested; **messaging is the only missing feature and it is waiting on a phone number**, not on code;
-the worker, the storage adapter, the invariant job, the off-host audit anchor, the image and CI now
-exist, and the audit chain is a chain again. What stands between here and production is a **push so CI
-has ever run**, **the S3 boundary proven against the real bucket** (a local server has answered, not a
-production provider), an unproven restore, a security review, no deployed environment, and the owner
-items in §5.
+tested; **messaging is still the only missing feature, and it now waits on pairing the gateway on a
+VPS that exists** rather than on a phone number. **A backend is deployed and running** — database,
+API, worker and reverse proxy, 17 migrations, one invited owner, and a login path verified over HTTP.
+What stands between here and production is **a route from the internet to the VM**, the **dump-role
+decision** (§5), a deployed frontend, TLS, an unproven restore, a security review, and the owner items
+in §5.

@@ -22,7 +22,7 @@
  * owner's actions change money.
  */
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import type { PoolClient } from "pg";
 import { config } from "../config.js";
@@ -536,6 +536,13 @@ async function runLogicalBackup(ctx: JobContext): Promise<JobResult> {
   });
 
   if (!outcome.ok) {
+    // `pg_dump` writes the archive as it goes, so a dump that dies halfway leaves a file of
+    // approximately the right size and the wrong contents — while runbook step 12a tells the
+    // operator to trust `ls -lh /app/var/backups`. Failing partway through `academy_settings`
+    // (which is what FORCE ROW LEVEL SECURITY does to a non-exempt role) left exactly that, once
+    // per attempt. Removing it here is what makes "a file is present" mean "a dump completed":
+    // a missed backup has to look like a missed backup, not like a backup.
+    await rm(filePath, { force: true }).catch(() => undefined);
     throw new Error(`the logical backup did not complete: ${outcome.error}`);
   }
 

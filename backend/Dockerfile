@@ -53,6 +53,34 @@ WORKDIR /app
 RUN groupadd --system --gid 1001 ia \
  && useradd --system --uid 1001 --gid ia --home-dir /app --shell /usr/sbin/nologin ia
 
+# `pg_dump` for the worker's nightly `ops.logical_backup` (DEPLOYMENT §7, runbook step 12a).
+#
+# The job spawns `pg_dump` (`src/worker/jobs.ts`) and the runbook expects one dump per night in
+# `BACKUP_DIR`, but this base image ships no PostgreSQL client: the job failed with
+# `spawn pg_dump ENOENT`, `job_runs` recorded `failed`, and SYS-03 reported no backup at all.
+#
+# The major version has to match the server (Postgres 16, `deploy/docker-compose.prod.yml`),
+# because `pg_dump` refuses to dump a server newer than itself. Debian bookworm's own repo has
+# only 15 and bookworm-backports carries no 16, so the client comes from PGDG. The repo and its
+# key are removed again after the install: the image should carry the binary, not a
+# third-party apt source. `ca-certificates` is named explicitly so `--auto-remove` below cannot
+# take it with the build-only tools.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends ca-certificates wget gnupg; \
+    install -d /usr/share/postgresql-common/pgdg; \
+    wget -q -O /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+      https://www.postgresql.org/media/keys/ACCC4CF8.asc; \
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends postgresql-client-16; \
+    apt-get purge -y --auto-remove wget gnupg; \
+    rm -f /etc/apt/sources.list.d/pgdg.list \
+          /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc; \
+    rm -rf /var/lib/apt/lists/*; \
+    pg_dump --version
+
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
@@ -83,8 +111,12 @@ ENV APP_ENTRY=dist/src/server.js
 
 # Liveness, per DEPLOYMENT §6: unauthenticated and deliberately shallow (SYS-01). `node -e`
 # rather than curl/wget because the slim image has neither and we already require Node.
+#
+# The path is the contract's `/api/v1/health` (SYS-01); the router mounts every contract
+# route under `/api/v1`, so a bare `/health` is a 404 and the container would read
+# `unhealthy` while the process is perfectly healthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3200)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3200)+'/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 # `exec` so the Node process is PID 1 and receives SIGTERM directly — the worker's graceful
 # shutdown (finish the current job, release `sending` rows) depends on that signal arriving.
