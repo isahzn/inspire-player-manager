@@ -49,8 +49,8 @@ HTTP on `:80`, with the HTTPS switch documented inline in
 | The nightly invariant job, run for real on a chain with the anchor configured | **`ops.invariant_nightly ok`**, 3 audit rows checked, `auditChainBroken: 0`, `anchorStatus: uploaded` — and the uploaded object's `headHash` **equals** the chain head read back from the database (§3) |
 | **The deployment itself, on the VPS** | **Running.** `ia_db`, `ia_api`, `ia_worker` all `healthy` and `ia_caddy` up, HTTP-only on `:80`. 17 migrations applied, seed applied, and the database holds **exactly one user — the owner, `invited`, with a live 72 h invite**. `GET /api/v1/health` → `200 {"status":"ok"}`; an unauthenticated `GET /api/v1/users` → **401 `UNAUTHENTICATED` with a `requestId`** (the real router, not a 404) (§12) |
 | **Login over plain HTTP** | **Verified end to end** with a throwaway active coach, over the forwarded SSH port: `POST /api/v1/auth/login` → 200 and `Set-Cookie: ia_session=…; Path=/; HttpOnly; SameSite=Lax` — **no `Secure`**, because `COOKIE_SECURE=false` for the HTTP-only pilot — then `GET /api/v1/auth/me` → **200 with the cookie and 401 without it**. The throwaway account was deleted afterwards and the database is back to one row (§12) |
-| **Reaching the API from the internet** | **Not possible yet.** The VM sits behind the provider's NAT (`enp16s0 192.168.122.24`, egress `93.127.141.71`) and only **SSH/10057** is forwarded to it: public 80/443 are answered by **DatabaseMart's own Traefik** (`CN=TRAEFIK DEFAULT CERT`, Go `404 page not found`), which has no router for this box. Internally the paid-for stack is correct — `http://127.0.0.1/api/v1/health` → 200 through our own Caddy (§5) |
-| **The nightly logical backup** | **Still fails, loudly and correctly.** `pg_dump` is in the image now (16.15, matching the v16 server), but the dump dies partway: pg_dump sets `row_security = off` and these tables are **FORCE ROW LEVEL SECURITY**, so only a superuser or a `BYPASSRLS` role can read them — and `ia_migrator`/`ia_app` are both deliberately forbidden `BYPASSRLS` (§5). `job_runs` records `failed` and **no file is left behind**, which is the honest state rather than a truncated dump (§12) |
+| **Reaching the API from the internet** | **The forward works; DNS is the last step.** The VM sits behind the provider's NAT (`enp16s0 192.168.122.24`), and the provider now routes the hostname **`inspire-player.lk`** to this VM's port 80. Verified **from outside**: `Host: inspire-player.lk` against `93.127.141.71` → `/api/v1/health` **200 `{"status":"ok"}`**, an unauthenticated `/api/v1/users` → **401 with a `requestId`**, and a CORS preflight for `http://inspire-player.lk` → **204** with the matching `Access-Control-Allow-Origin`. `inspire-player.lk` is **NXDOMAIN** today, so the A record is all that is missing (§5) |
+| **The nightly logical backup** | **Works, and has been restored.** `pg_dump` 16.15 is in the image, and the job connects as **`ia_backup`** — read-only, and the only role with `BYPASSRLS`, because `pg_dump` sets `row_security = off` and every table here is FORCE RLS (§12.6). `job_runs` for 2026-10-14 reads **`ok`** with a 186 KiB dump, and a full **restore drill passed in 3 s** (35 tables, 17 migrations, the academy row) — entry 1 in [`RESTORE_LOG.md`](docs/engineering/RESTORE_LOG.md). A *failed* dump still leaves no file behind (§12.4) |
 
 Endpoint progress: **M2 23/23 · M3 31/31 · M4 19/19 · M5 26/26 · M6 9/9 · M7 0/21 · M8 6/6.**
 
@@ -181,23 +181,18 @@ can run the whole system today without any of it.
 
 **New this session — the two things now standing between the deployment and real use:**
 
-- **Nothing routes to this VM from the internet.** The provider NATs a *shared* public IP and has
-  forwarded **only SSH/10057**. Its edge is a Traefik instance that owns 80/443 for the whole shared
-  IP, so the Caddy container here can listen on 80 and 443 and still be unreachable. Three ways out,
-  each needing a person: **(a)** ask the provider to forward two more ports (e.g. public 8080/8443 →
-  this VM's 80/443) — cheapest, and needs no DNS; **(b)** take a dedicated IP so the provider's edge
-  stops intercepting; **(c)** a domain plus a **Cloudflare Tunnel**, which needs no inbound port at
-  all and would give real HTTPS on `app.`/`api.` hostnames. Until one is chosen the stack is
-  reachable only through an SSH tunnel — enough for the owner to look at it, not enough for anyone
-  else.
-- **A decision: which role takes the nightly dump.** A full logical dump of an RLS database has to
-  come from a role that is *exempt* from RLS, because `pg_dump` sets `row_security = off` by design
-  and cannot be talked out of it. Both current roles are forbidden `BYPASSRLS` on purpose
-  (`db/bootstrap.sql`, `migrations/0016`), so the choice is either a **dedicated `ia_backup` role
-  with `BYPASSRLS` + `pg_read_all_data`**, used only by the dump (**recommended** — least
-  privilege), or pointing the dump at the **superuser** URL (smallest change, but the worker
-  container would then hold credentials that can read every database and the filesystem). Recorded
-  rather than chosen: it is a security decision in a system that handles money.
+- **`inspire-player.lk` needs an A record pointing at `93.127.141.71`.** *Solved this session* — the
+  provider's panel now forwards that hostname to this VM's port 80, and the forward is **verified
+  working from outside** (§2); the base URLs and CORS were set to it. What is left is DNS: the name
+  is NXDOMAIN today, which is a registrar task, not a server one. (If the provider's interception
+  becomes a problem later, the two alternatives remain a dedicated IP or a **Cloudflare Tunnel** —
+  the latter needs no inbound port at all and would give real HTTPS on `app.`/`api.` hostnames.)
+- ~~**A decision: which role takes the nightly dump.**~~ — **decided and done: a dedicated `ia_backup`
+  role** (`BYPASSRLS` + `pg_read_all_data`, read-only, used by nothing else), created by
+  `db/bootstrap.sql` and given its password by the bootstrap CLI from `DATABASE_BACKUP_URL`. The
+  alternative — the superuser URL — was rejected because it would put credentials that can read every
+  database *and* the machine's filesystem inside an unattended nightly job. The dump now succeeds and
+  **has been restored** (§2, §12.6).
 
 1. **A phone number for OpenWA — supplied 2026-10-14** (a test number; deliberately not written
    into this repository). What M7 still waits on is a **home for the gateway**: the session must be
@@ -394,12 +389,13 @@ looking exactly like a backup. §12 has each one with the evidence that found it
 
 ## 10. Next steps, in order
 
-1. ~~**Push so CI runs once**~~ — **done** (run #2 on `f7c656a` green, guard live), and **the VPS
-   deployment is done too** (§2). Its own next steps, in order: **(a)** choose how the VM becomes
-   reachable (§5) and set `APP_BASE_URL` / `API_BASE_URL` / `CORS_ALLOWED_ORIGINS` to the real host;
-   **(b)** decide the dump role (§5) and re-run the backup until `job_runs` says `ok`;
-   **(c)** deploy `frontend/` and turn `NEXT_PUBLIC_USE_MOCKS` off; **(d)** give the owner the invite
-   link so they set their own password and turn TOTP on (runbook step 9); **(e)** turn HTTPS on by
+1. ~~**Push so CI runs once**~~ — **done** (run #2 on `f7c656a` green, guard live), **the VPS
+   deployment is done**, and **the dump role is chosen and working** (§2). What is left: **(a)** point
+   the A record for `inspire-player.lk` at `93.127.141.71` — the provider's forward already works and
+   the base URLs and CORS are set to that host (§5); **(b)** deploy `frontend/`, which is now the
+   *user-visible* blocker, because the invite the owner needs is `<APP_BASE_URL>/accept-invite?token=…`
+   — a **frontend** route — and then re-issue the invite so the link carries the new hostname;
+   **(c)** copy the dumps and `ia_files` off the machine (runbook 12b); **(d)** turn HTTPS on by
    changing one line in the Caddyfile and putting `COOKIE_SECURE=true` back.
 2. **Run `npm run storage:probe` and `npm run storage:probe -- --anchor` against the real bucket**
    before anything is deployed into it, and decide the provider (`OPEN-016`). The driver's interop is
@@ -435,7 +431,7 @@ M9–M10 — checked against what the code actually is today.
 | 3 | T-FIL-09 and T-MSG-02/03/06 pass | T-FIL-09 **passes**; **every T-MSG row is blocked** (M7 unbuilt) |
 | 4 | OpenWA spike S1 (O18–O22) + T-MSG-12 on the real number | **Not started** — needs the number (§5.1) |
 | 5 | Accessibility + real-device mobile checklist signed off | **Not done** — M9; needs the owner's phone |
-| 6 | T-OPS-01 within 90 days + T-OPS-02 rehearsal | **Not done** — `docs/engineering/RESTORE_LOG.md` does not exist. The backup job now *writes* a dump when `BACKUP_DIR` is set, which proves a dump, **not a restore** |
+| 6 | T-OPS-01 within 90 days + T-OPS-02 rehearsal | **Started, for the first time with evidence.** [`RESTORE_LOG.md`](docs/engineering/RESTORE_LOG.md) now exists and holds **one real drill**: the nightly dump restored into a throwaway database in 3 s with `pg_restore` exit 0 and no messages. That proves the mechanism, not an RTO — the database holds one invited owner, so the number is a floor — and the dump is still on the machine it protects |
 | 7 | Security gate (`SECURITY_AND_PRIVACY` §7) | **Unverified** — no security review has been run as a gate |
 | 8 | `openapi.yaml` matches the running server, frontend types generated from it, no drift | **Partly** — the contract is generated, valid (135 operations) and lint-clean; the additions this session flagged are still unblessed, and no generated frontend types exist |
 | 9 | OPEN-001/002/009/018/019 resolved or accepted in writing | **OPEN-002 resolved**; 001, 009, 018, 019 still open. 018 is recorded but deliberately unapplied |
@@ -568,9 +564,9 @@ backup, not like a backup.** Verified by emptying the directory and watching two
 the only failure that leaves a file needs a real `pg_dump` against a table the dumping role cannot
 read, which the suite has no way to guarantee on a machine that may not have `pg_dump` at all.
 
-**The dump itself is not fixed, and cannot be fixed in code:** a full logical dump of an RLS
-database must come from a role exempt from RLS, and both roles are deliberately forbidden
-`BYPASSRLS`. That is §5's decision, recorded rather than taken.
+**The dump itself could not be fixed in code**, because a full logical dump of an RLS database must
+come from a role exempt from RLS and both existing roles are deliberately forbidden `BYPASSRLS`. That
+was put to the owner as a decision rather than taken — §12.6 is what came back and what it proved.
 
 ### 12.5 HTTP-only, and the cookie that would have broken it
 
@@ -588,6 +584,40 @@ Verified the way a browser would, over the tunnel: `POST /api/v1/auth/login` →
 `Set-Cookie: ia_session=…; HttpOnly; SameSite=Lax` with **no `Secure`**, then `GET /api/v1/auth/me` →
 **200 with the cookie and 401 without it**. The throwaway active coach used for that was deleted
 afterwards; the database holds one user again.
+
+### 12.6 The dump role, and the first restore this project has ever performed
+
+The decision came back as **a dedicated `ia_backup` role**, which is the right shape: `BYPASSRLS` for
+the reason above, `pg_read_all_data` (PG 14+) for read access that a later migration cannot forget to
+grant, and nothing else — no write, no DDL, no superuser. `db/bootstrap.sql` creates it and carries
+the reasoning for why it is the one exception to this schema's own "no BYPASSRLS" rule, and the
+guard in that file now *fails the bootstrap* if a future edit ever swaps the flags between roles.
+
+The worker connects the dump as `ia_backup` and not as the migrator, and when `DATABASE_BACKUP_URL`
+is missing the job records `skipped` naming it instead of failing every 15 s — the old behaviour
+retried a permanent configuration error one hundred and twenty times an hour (§9).
+
+The contrast is worth keeping, because it is what made the diagnosis unambiguous. Both roles were
+asked to read `academy_settings` the way `pg_dump` does:
+
+```
+  ia_backup    → 1 row (RLS bypassed)
+  ia_migrator  → ERROR: query would be affected by row-level security policy for table "academy_settings"
+```
+
+**It works, and it has been restored** — which is the runbook's own test of whether a backup is a
+backup:
+
+| Drill | Result |
+|---|---|
+| `pg_restore` into a throwaway `ia_restore_test` on the VPS | **exit 0, no messages** |
+| Restored | 35 tables · 17 migrations · `academy_settings` = “Inspire Academy / Asia/Colombo / LKR” · 1 user (`owner`, `invited`) · 2 `audit_logs` rows |
+| Duration | **3 s** (create + restore + verify + drop) |
+| Left behind | nothing — the throwaway was dropped and `ia_prod` confirmed untouched |
+
+It is written up as [`RESTORE_LOG.md`](docs/engineering/RESTORE_LOG.md) entry 1, with its limits
+stated there rather than implied: 3 s is a floor measured on an almost-empty database, the dump still
+lives on the machine it protects, and `ia_files` (the payment proofs) is not in it.
 
 ## 13. Previous session — the push, the guard, and two real defects
 
@@ -630,9 +660,10 @@ rests on, not because it is still true.
 ### The one-line version (updated 2026-10-14, fourth session)
 
 Money, documents, the dashboard, the reports, the audit trail and the system page all work and are
-tested; **messaging is still the only missing feature, and it now waits on pairing the gateway on a
-VPS that exists** rather than on a phone number. **A backend is deployed and running** — database,
-API, worker and reverse proxy, 17 migrations, one invited owner, and a login path verified over HTTP.
-What stands between here and production is **a route from the internet to the VM**, the **dump-role
-decision** (§5), a deployed frontend, TLS, an unproven restore, a security review, and the owner items
-in §5.
+tested; **messaging is still the only missing feature, and it waits on pairing the gateway on a VPS
+that exists** rather than on a phone number. **A backend is deployed and reachable** — database, API,
+worker and reverse proxy, 17 migrations, one invited owner, a login path verified over HTTP, and a
+nightly dump that has been **restored** — with the hostname `inspire-player.lk` already forwarded to
+it and only its **A record** missing. What stands between here and production is **DNS**, a deployed
+**frontend** (which is what turns the owner's invite link into something they can open), TLS, an
+off-host copy of the dumps and the payment proofs, a security review, and the owner items in §5.

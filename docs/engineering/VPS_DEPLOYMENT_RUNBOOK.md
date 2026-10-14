@@ -116,12 +116,13 @@ openssl rand -base64 48   # → CSRF_SECRET
 openssl rand -base64 48   # → TOTP_ENCRYPTION_KEY
 openssl rand -base64 36   # → the password inside DATABASE_URL        (ia_app)
 openssl rand -base64 36   # → the password inside DATABASE_MIGRATOR_URL (ia_migrator)
+openssl rand -base64 36   # → the password inside DATABASE_BACKUP_URL   (ia_backup — the dump role)
 openssl rand -base64 36   # → the password inside DATABASE_SUPERUSER_URL (postgres, step 6 only)
 ```
 
 **Keep `TOTP_ENCRYPTION_KEY`.** It encrypts `users.totp_secret_enc` at rest. Lose it and every owner's
 TOTP secret is unrecoverable — they re-enrol, which is survivable; what is not survivable is being
-surprised by it later. Put all six values in the offline secret export DEPLOYMENT §7 requires.
+surprised by it later. Put all seven values in the offline secret export DEPLOYMENT §7 requires.
 
 ## 6. Write `.env.production`
 
@@ -141,6 +142,7 @@ Every line below matters; lines not listed keep `.env.example`'s value, which is
 | `APP_ENV` | `production` |
 | `DATABASE_URL` | `postgres://ia_app:<generated>@db:5432/ia_prod` — **`db` is the compose service name**; with managed Postgres use its host and add `?sslmode=require` |
 | `DATABASE_MIGRATOR_URL` | `postgres://ia_migrator:<generated>@db:5432/ia_prod` — the worker and every operator CLI use this, the API never does |
+| `DATABASE_BACKUP_URL` | `postgres://ia_backup:<generated>@db:5432/ia_prod` — the **only** role with `BYPASSRLS`, used by nothing except the nightly `pg_dump` (step 12a explains why it has to be a different role from the migrator). Leave it out and the backup job records `skipped`, naming this variable, instead of failing every 15 s |
 | `DATABASE_SUPERUSER_URL` | `postgres://postgres:<generated>@db:5432/ia_prod` — **step 8 only.** Delete it from this file afterwards |
 | `SESSION_COOKIE_SECRET` | the generated value |
 | `CSRF_SECRET` | the generated value |

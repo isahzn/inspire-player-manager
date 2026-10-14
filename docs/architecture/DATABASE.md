@@ -285,7 +285,7 @@ erDiagram
 
 ## 7. Row-level security (defense in depth)
 
-- DB roles: `ia_migrator` (DDL, owns objects), `ia_app` (runtime; **no** `BYPASSRLS`, not table owner; `audit_logs`/`message_events` INSERT+SELECT only). The API never runs as a superuser.
+- DB roles: `ia_migrator` (DDL, owns objects), `ia_app` (runtime; **no** `BYPASSRLS`, not table owner; `audit_logs`/`message_events` INSERT+SELECT only), and `ia_backup` — the **only** role with `BYPASSRLS`, read-only via `pg_read_all_data`, used by nothing but the nightly logical dump. It is not a convenience: `pg_dump` opens with `set row_security = off` so it cannot silently emit a filtered archive, which makes an RLS-exempt role the only thing that can dump a `FORCE ROW LEVEL SECURITY` table at all. The first real deployment's backup failed on exactly that (`handoff.md` §12.4). The API never runs as a superuser.
 - Each request transaction starts with `SET LOCAL app.user_id = '<uuid>'; SET LOCAL app.role = 'owner|coach'`. Helper functions: `app_user_id()`, `app_role()`, `app_coach_group_ids(on_date)`.
 - `ENABLE` + `FORCE ROW LEVEL SECURITY` on every table below.
 

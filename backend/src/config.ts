@@ -130,6 +130,13 @@ export const config = {
    */
   worker: {
     migratorDatabaseUrl: process.env["DATABASE_MIGRATOR_URL"]?.trim() || undefined,
+    /**
+     * The role the nightly dump connects as (`ia_backup`), kept separate from the migrator the
+     * rest of the worker uses: a dump must be exempt from RLS and the migrator must not be
+     * (DATABASE §7, and `0016` gives the reason). Unset means the backup job records `skipped`
+     * and says which variable is missing, rather than attempting a dump that cannot succeed.
+     */
+    backupDatabaseUrl: process.env["DATABASE_BACKUP_URL"]?.trim() || undefined,
     /** How often the scheduler looks for due jobs. */
     tickMs: integer("WORKER_TICK_MS", 15_000),
     heartbeatMs: integer("WORKER_HEARTBEAT_MS", 60_000),

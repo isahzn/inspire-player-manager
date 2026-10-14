@@ -1,12 +1,18 @@
 /**
  * One-time per-database bootstrap, run as a superuser (DATABASE §7).
  *
- * Creates the two runtime roles (`ia_migrator`, `ia_app`), the required extensions,
+ * Creates the three roles (`ia_migrator`, `ia_app`, `ia_backup`), the required extensions,
  * and the schema grants — then sets each role's password from the connection URLs in
  * the environment, so no credential is ever hardcoded. Managed Postgres providers
  * give you a privileged role for exactly this step, and it is safe to re-run.
  *
- * Usage: `npm run bootstrap`  (needs DATABASE_SUPERUSER_URL plus the two role URLs)
+ * `ia_backup` is the one role with BYPASSRLS, because `pg_dump` turns row security off and every
+ * table here is FORCE ROW LEVEL SECURITY (db/bootstrap.sql carries the long version). Its password
+ * is set only when `DATABASE_BACKUP_URL` is present, so a development box that never runs the dump
+ * leaves the role unable to log in rather than with a default credential.
+ *
+ * Usage: `npm run bootstrap`  (needs DATABASE_SUPERUSER_URL, DATABASE_URL, DATABASE_MIGRATOR_URL;
+ * DATABASE_BACKUP_URL is optional)
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -50,12 +56,22 @@ async function main() {
   const superConn = parse(superUrl, "DATABASE_SUPERUSER_URL");
   const migrator = parse(process.env["DATABASE_MIGRATOR_URL"] ?? "", "DATABASE_MIGRATOR_URL");
   const app = parse(process.env["DATABASE_URL"] ?? "", "DATABASE_URL");
+  // Optional: the dump role. Absent on a development box, present on a deployment that takes
+  // nightly backups — and required there, because a dump taken as the migrator fails on the
+  // first FORCE RLS table (handoff §12.4).
+  const backupUrl = process.env["DATABASE_BACKUP_URL"]?.trim();
+  const backup = backupUrl ? parse(backupUrl, "DATABASE_BACKUP_URL") : null;
 
   if (migrator.user === app.user) {
     throw new Error("the runtime role and the migration role must be different (DATABASE §7)");
   }
   // SECURITY_AND_PRIVACY §5: secrets shorter than 32 bytes are refused at startup.
-  for (const [name, conn] of [["ia_migrator", migrator], ["ia_app", app]] as const) {
+  const connections = [
+    ["ia_migrator", migrator] as const,
+    ["ia_app", app] as const,
+    ...(backup ? [["ia_backup", backup] as const] : []),
+  ];
+  for (const [name, conn] of connections) {
     if (conn.password.length < 16) {
       throw new Error(`${name}'s password is too short (min 16 chars for local dev, 32 in production)`);
     }
@@ -83,14 +99,19 @@ async function main() {
       // Passwords come from the environment, never from a file in the repo.
       await client.query(`alter role ia_migrator with login password ${quote(migrator.password)}`);
       await client.query(`alter role ia_app with login password ${quote(app.password)}`);
+      if (backup) {
+        await client.query(`alter role ia_backup with login password ${quote(backup.password)}`);
+      }
       // The migration role needs CREATE on the database (it creates schemas); the
       // runtime role only ever needs CONNECT.
       await client.query(
         `grant connect, create, temporary on database ${ident(database)} to ia_migrator`,
       );
       await client.query(`grant connect on database ${ident(database)} to ia_app`);
+      // Read-only, and bootstrap.sql already granted it `pg_read_all_data`.
+      await client.query(`grant connect on database ${ident(database)} to ia_backup`);
       const roles = await client.query<{ rolname: string; rolbypassrls: boolean }>(
-        "select rolname, rolbypassrls from pg_roles where rolname in ('ia_migrator','ia_app') order by rolname",
+        "select rolname, rolbypassrls from pg_roles where rolname in ('ia_migrator','ia_app','ia_backup') order by rolname",
       );
       console.log(
         `bootstrapped ${database}: ${roles.rows.map((r) => `${r.rolname}(bypassrls=${r.rolbypassrls})`).join(", ")}`,

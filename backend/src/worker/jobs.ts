@@ -487,7 +487,14 @@ async function runRetentionPurge(ctx: JobContext): Promise<JobResult> {
 // ---------------------------------------------------------------------------
 async function runLogicalBackup(ctx: JobContext): Promise<JobResult> {
   const dir = config.worker.backupDir;
-  const url = config.worker.migratorDatabaseUrl;
+  // The dump connects as `ia_backup`, not as the migrator the rest of the worker uses, and not as
+  // the superuser. `pg_dump` opens with `set row_security = off` so it can never quietly emit a
+  // *filtered* archive; against a table with FORCE ROW LEVEL SECURITY that is an error unless the
+  // role is exempt from RLS. Every table here is FORCE RLS (DATABASE §7) and `ia_migrator` is
+  // deliberately not exempt (0016) — so the migrator can read every row through its own policy and
+  // still be unable to dump the table. `ia_backup` has exactly the one privilege the dump needs
+  // (`pg_read_all_data` + `BYPASSRLS`) and nothing else; db/bootstrap.sql carries the reasoning.
+  const url = config.worker.backupDatabaseUrl;
   if (!dir) {
     return {
       // `skipped`, not `ok`: SYS-03 would otherwise read the last backup as healthy on a
@@ -503,8 +510,22 @@ async function runLogicalBackup(ctx: JobContext): Promise<JobResult> {
     };
   }
   if (!url) {
-    // Unreachable in practice (`workerDb()` already refused), kept so the branch cannot rot.
-    throw new Error("DATABASE_MIGRATOR_URL is missing, so pg_dump has no database to read");
+    return {
+      // `skipped`, for the same reason the missing `BACKUP_DIR` is `skipped`: this is a
+      // configuration gap, not a transient fault, and retrying it every tick would produce the
+      // same failure forever (handoff §9). `SYS-03` reads this row, so "no backup" stays visible
+      // while the reason stays actionable.
+      status: "skipped",
+      detail: {
+        skipped: true,
+        reason:
+          "DATABASE_BACKUP_URL is not set, so there is no role the dump may run as. A dump taken " +
+          "as ia_migrator fails on the first FORCE ROW LEVEL SECURITY table, which is every table " +
+          "here, because pg_dump turns row security off. Create the ia_backup role " +
+          "(db/bootstrap.sql, which explains why it is the one role with BYPASSRLS) and point " +
+          "DATABASE_BACKUP_URL at it.",
+      },
+    };
   }
 
   const stamp = `${ctx.today}_${ctx.time.replace(":", "")}`;
