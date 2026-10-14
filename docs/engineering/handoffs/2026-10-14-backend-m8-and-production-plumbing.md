@@ -2,8 +2,13 @@
 
 > **Date:** 2026-10-14 · **Author:** Freebuff (backend) · **Milestones:** M8 (dashboards, reports,
 > audit, system health) and the worker/scheduler/storage/CI work named in `handoff.md` §11 B
-> **Status:** complete, suite green. **Start here if you are the next session.** Previous
-> milestone: [M6 complete](2026-10-14-backend-m6-complete.md).
+> **Status:** complete, suite green. Previous milestone: [M6 complete](2026-10-14-backend-m6-complete.md).
+>
+> **Read the follow-up first if you are the next session:**
+> [the audit chain and the anchor](2026-10-14-audit-chain-and-anchor.md) (same day, later) proved the
+> S3 boundary against a real server, uploaded the anchor to `AUDIT_ANCHOR_BUCKET` (which §7 below
+> records as not done), and **repaired the audit hash chain**, which the nightly job this milestone
+> built turned out to have found broken. §6's flaky-suite note and this file's history still stand.
 
 ## 1. Result
 

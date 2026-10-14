@@ -73,6 +73,7 @@ Separate secrets, databases, buckets, and domains per environment. Prod data is 
 | `TOTP_ENCRYPTION_KEY` | api | encrypts TOTP secrets |
 | `LOG_LEVEL`, `SENTRY_DSN` (optional) | all | observability |
 | `AUDIT_ANCHOR_BUCKET`/`_PREFIX` | worker | external hash anchor |
+| `AUDIT_ANCHOR_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_FORCE_PATH_STYLE` | worker | the anchor bucket's own transport, **added by the implementation** (M8 follow-up §4): the spec named only the bucket and prefix, and the anchor belongs in a different account from the files bucket. With only `AUDIT_ANCHOR_BUCKET` set, the endpoint, region and credentials are inherited from `STORAGE_*` — but never the bucket name or prefix, because those two are what make it a separate witness |
 | `BACKUP_*` | backup job | dump target + encryption key |
 
 `.env.example` (committed) lists names with dummy values. The backend refuses to start if a required variable is missing/weak (e.g., secret < 32 bytes).
@@ -111,6 +112,7 @@ Frontend release: build with `NEXT_PUBLIC_API_BASE_URL`; preview deployment veri
 | DB | connections, slow queries (> 500 ms logged), disk | provider alerts |
 | Storage | PDF stale count, upload errors | `/system/health` |
 | Backups | last backup status/time | alert if > 26 h |
+| Audit anchor | `anchorStatus`/`anchorObject` on the `ops.invariant_nightly` run | alert on any run that is not `ok`; the anchor is the one check whose absence is invisible in the product |
 | Errors | structured logs (+ optional Sentry-style tracker with PII scrubbing) | spike alert |
 | Invariant job | nightly: `paid_minor = Σ allocations`, invoice totals = Σ items, no negative balances, orphan counts | failure ⇒ page the operator |
 
@@ -154,7 +156,7 @@ If the worker is down, nothing is lost: next run catches up per the rules in [BI
 | Session generation, reminder enqueue, message consumer, OpenWA health | `sessions.generate` is built. The other three — `messages.reminder_enqueue`, `messages.queue_consumer`, `openwa.health` — are **registered but recorded as `skipped`** with the reason, because M7 is blocked on a dedicated phone number and nothing may be written against guessed provider behaviour |
 | PDF sweeper | `files.pdf_sweeper`, interval. Rebuilds what `pdf_stale` flags, through `INV-07`'s own render path |
 | Stuck-job and orphan-file sweepers | `ops.stuck_jobs` / `files.orphan_sweeper`. The stuck pass closes a `running` row older than `WORKER_STUCK_MINUTES` as `failed`, which is also what stops a crashed run from ever being counted as done |
-| Invariant verification, audit-chain verify + anchor | `ops.invariant_nightly`. Checks the money invariants of §6, recomputes the audit hash chain, and records the verified head in `audit_anchors`. `AUDIT_ANCHOR_BUCKET` upload is **not** implemented — the anchor row is the local record of what was verified |
+| Invariant verification, audit-chain verify + anchor | `ops.invariant_nightly`. Checks the money invariants of §6, recomputes the audit hash chain, and records the verified head in `audit_anchors`. The anchor is then **uploaded to `AUDIT_ANCHOR_BUCKET` as one immutable object per verification** (`audit-anchor/<head-row>-<anchor-id>.json`, canonical JSON, never overwritten), which is what makes it a witness the database operator cannot revise. With no bucket configured the run records `anchorStatus: not_configured` and says where the verification *is* recorded; a **configured bucket that refuses the upload fails the run**, on the same reasoning as `assertStorageUsable` — a deployment must not believe it has off-host tamper evidence when it does not |
 | Retention/purge | `ops.retention_purge`. Prunes operational history only (job runs, idempotency keys, expired capability tokens, elapsed health rows). Financial rows are never deleted; `RETENTION_FINANCIAL_YEARS` is a reporting threshold, not a delete |
 | Logical backup | `ops.logical_backup` writes `pg_dump` into `BACKUP_DIR` and records itself. **Shipping it off-host is the operator's step** (§7) — the job proves the dump was produced, not that it is recoverable |
 | Worker heartbeat | `worker.heartbeat` touches the single `worker_heartbeats` row every minute; §6's 5-minute staleness alert is computed from it |
@@ -168,7 +170,7 @@ If the worker is down, nothing is lost: next run catches up per the rules in [BI
 4. Start OpenWA: link the dedicated number via QR **or pairing code** (over VPN), run `MSG-08` test to an owner's number, leave **automation paused** until owner records consent for guardians.
 5. Import players via CSV ([CSV_IMPORT](../engineering/CSV_IMPORT.md)); review; do a **billing preview** for the first period; run it.
 
-**Deployment checklist (go-live gate):** DNS + TLS valid · HSTS · cookies Secure · CORS exact · env secrets set and unique · DB roles verified (no superuser, RLS forced) · backup + **restore tested** · invariant job green · uptime monitor wired · OpenWA not reachable from the public internet (port scan) · webhook HMAC-SHA256 verified (negative test) · owner TOTP · release gate passed · privacy notice published · handover doc delivered.
+**Deployment checklist (go-live gate):** DNS + TLS valid · HSTS · cookies Secure · CORS exact · env secrets set and unique · DB roles verified (no superuser, RLS forced) · **storage interop proven against the real bucket** (`npm run storage:probe`, and `npm run storage:probe -- --anchor` for the anchor bucket — a driver that has only ever been unit-tested is a driver nobody has used) · backup + **restore tested** · invariant job green · uptime monitor wired · OpenWA not reachable from the public internet (port scan) · webhook HMAC-SHA256 verified (negative test) · owner TOTP · release gate passed · privacy notice published · handover doc delivered.
 
 **Operational handover pack** (to the academy owner): who operates what, how to add a coach, how to reconnect WhatsApp (QR or pairing code), how to read the dashboard banners, what to do on a bad invoice (void/reissue), how to request a backup restore, contacts, monthly checklist (verify backup status, review `dead`/`needs_review`, review audit anomalies).
 

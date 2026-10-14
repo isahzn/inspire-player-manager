@@ -1,12 +1,16 @@
 # handoff.md — read this one first
 
-> **Updated:** 2026-10-14 (backend session: M8 + the production plumbing) · **Owner granted standing
-> permission** (§6) — ordinary development, local infrastructure and commits need no further approval.
+> **Updated:** 2026-10-14 (second backend session of the day: the S3 boundary proved against a real
+> server, the audit anchor uploaded off-host, and the audit hash chain repaired) · **Owner granted
+> standing permission** (§6) — ordinary development, local infrastructure and commits need no further
+> approval.
 >
 > This file is the whole picture: what works, what is broken, what only a person can supply, and the
 > exact next actions. The milestone records live in
 > [`docs/engineering/handoffs/`](docs/engineering/handoffs/) — the newest is
-> `2026-10-14-backend-m8-and-production-plumbing.md` (M8 complete + the worker/storage/CI work).
+> `2026-10-14-audit-chain-and-anchor.md` (the S3 interop proof, the anchor upload, and the audit
+> chain fix), after `2026-10-14-backend-m8-and-production-plumbing.md` (M8 + the worker/storage/CI
+> work).
 > Nothing here is invented: every number below was measured in this session, and where something is
 > only code-read rather than observed, it says so.
 
@@ -28,13 +32,16 @@ Four things, in this order, with the fourth deliberately not started:
 | Check | Result |
 |---|---|
 | `npx tsc --noEmit` | **exit 0** |
-| `npx vitest run` (all three projects) | **240 passed / 240, exit 0** — run **twice** after the harness fix in §9, 254 s and 279 s. 25 files (unit 101, db 21, integration 118) |
+| `npx vitest run` (all three projects) | **260 passed / 260, exit 0** — 27 files (unit 117, db 25, integration 118). The 20 new tests are the anchor's and the audit chain's (§3) |
+| `npx tsx scripts/migrate.ts` | 16 migrations applied, exit 0 (`0016` is the chain repair) |
+| `npm run storage:probe` (`-- --anchor` too) | **9/9 PASS, exit 0** against a real S3 server (`rclone serve s3`), including the negative: a wrong-secret signature is rejected `403`, an unsigned request `400` |
 | `npx tsx scripts/progress-report.ts` | **114 / 135 endpoints** |
 | `npm run openapi` + `npx redocly lint ../api/openapi.yaml` | valid, **135 operations**, 3 pre-existing warnings |
 | `node tools/check-links.mjs` | exit 0 — 56 files / 399 links, 0 broken |
 | `node tools/check-stale-refs.mts` | exit 0 — no stale provider references |
-| Commits | **9 new atomic commits**; the working tree now holds only the M8 work (§10 item 1) plus the two sample receipts, which stay untracked on purpose (§5.3) |
-| The worker, run for real | `npm run worker:once` exit 0, then `job_runs`/`worker_heartbeats` **read back out of the database**: five daily jobs `ok` at `2026-10-13T23:58Z`, `ops.logical_backup skipped` (no `BACKUP_DIR`) at `00:37Z`, and **nothing re-claimed that had already succeeded** — the `(job, run_key)` idempotency observed, not asserted |
+| Commits | **11 atomic commits** for M2–M8 (the 46 paths and the M8 work both committed); the working tree holds no source changes, and the two sample receipts stay untracked on purpose (§5.3) |
+| The worker, run for real | `npm run worker:once` exit 0, then `job_runs`/`worker_heartbeats` **read back out of the database**: five daily jobs `ok`, `ops.logical_backup skipped` (no `BACKUP_DIR`), and **nothing re-claimed that had already succeeded** — the `(job, run_key)` idempotency observed, not asserted |
+| The nightly invariant job, run for real on a chain with the anchor configured | **`ops.invariant_nightly ok`**, 3 audit rows checked, `auditChainBroken: 0`, `anchorStatus: uploaded` — and the uploaded object's `headHash` **equals** the chain head read back from the database (§3) |
 
 Endpoint progress: **M2 23/23 · M3 31/31 · M4 19/19 · M5 26/26 · M6 9/9 · M7 0/21 · M8 6/6.**
 
@@ -49,6 +56,15 @@ Nothing is deployed; CI now exists and has **never run** (§11, gate item 1).
 - **Documents** (M6, 9/9) — `INV-06/07` and `RCT-02` build, store and stream PDFs; `PUB-01` serves a
   guardian's capability link with one uniform 404; `PRF-01/02` upload and stream proofs with EXIF
   stripped and PDFs screened for active content.
+- **The audit chain is a chain again, and it now leaves the building** (new). Migration `0016`
+  makes the chain trigger read the whole table (`SECURITY DEFINER` as `ia_migrator`) — before it,
+  only owners could see `audit_logs`, so **every coach write and every failed login started a new
+  chain** and the nightly job reported a broken hash — and repairs the fragments the old reader
+  produced. `record()` additionally takes the chain's advisory lock before its insert, so two
+  overlapping writes cannot fork it. The **anchor now uploads** to `AUDIT_ANCHOR_BUCKET`: one
+  immutable canonical-JSON object per verification, which is what makes it a witness the database's
+  operator cannot revise. Unconfigured is reported as `not_configured`; a configured bucket that
+  refuses the upload fails the run.
 - **The dashboard, reports, audit trail and system page** (M8, 6/6). `DSH-01` answers every block with
   **`invoicedMinor` and `collectedMinor` as separate fields that are never summed**; `RPT-01` serves
   eight reports over real SQL with a per-report sort allow-list, and `RPT-02` exports the same rows
@@ -77,11 +93,11 @@ Nothing is deployed; CI now exists and has **never run** (§11, gate item 1).
    written against guessed provider behaviour, deliberately. The three M7 jobs are **registered** in
    the worker and are recorded `skipped` with the reason once their 08:30 window arrives — that
    recording path is code-read, **not observed**, because every tick so far ran before 08:30 local.
-2. **The S3 driver has never spoken to a real bucket.** Its unit test proves the crypto primitives
-   against published vectors and cross-checks the signature against a second implementation written
-   from the spec; it does **not** assert the AWS end-to-end vector. **Confirm it against MinIO or R2
-   before any deployment trusts proofs to it.** This is the one new artefact with an unverified
-   boundary.
+2. **The S3 driver has now spoken to a real S3 server, but not to a production bucket.**
+   `npm run storage:probe` against `rclone serve s3` in path-style passed 9/9, including the negative
+   that a forged signature is refused (`403`). What is still unexercised: **virtual-host addressing**
+   and any actual provider (R2/S3/Supabase). **Run the probe against the real bucket before any
+   deployment trusts proofs to it** — it is on the go-live checklist (DEPLOYMENT §9).
 3. **CI has never run.** There is no remote and no runner, so `.github/workflows/ci.yml` is a written
    workflow, not a green one. The first push is its first test.
 4. **The suite was flaky, and it was the harness.** Diagnosed and fixed this session (§9); two
@@ -93,9 +109,12 @@ Nothing is deployed; CI now exists and has **never run** (§11, gate item 1).
    [`NEEDS_FROM_OWNER.md`](NEEDS_FROM_OWNER.md) §3, including the additions this project made
    (`PUB-02` still wants a blessing, and this session added an optional `AuditEntry.entityId` and two
    optional `SystemHealth` fields — each flagged in the M8 handoff §4).
-7. **Nothing is deployed, no performance measurement exists, `docs/engineering/RESTORE_LOG.md` does
-   not exist, and the audit anchor is a local row** — nothing uploads it to `AUDIT_ANCHOR_BUCKET` yet.
-   Stated so none of it is mistaken for done.
+7. **Nothing is deployed, no performance measurement exists and `docs/engineering/RESTORE_LOG.md`
+   does not exist.** The audit anchor now *is* uploaded (§3), which removes the last item from this
+   list that code could close. Stated so none of the rest is mistaken for done.
+8. **Virtual-host S3 addressing has never been exercised**, and no production provider (R2/S3/
+   Supabase) has been spoken to — only a local `rclone serve s3` by path. `npm run storage:probe`
+   against the real bucket is the check, and it is on the go-live checklist (DEPLOYMENT §9).
 
 ## 4. The money question, answered (this is the plain-language answer)
 
@@ -168,9 +187,18 @@ done, you have permission."* Recorded as:
   domain and a CI runner are things only a person can hand over (§5). No amount of permission
   substitutes for them, which is why §5 exists.
 
-## 7. Active files (this session)
+## 7. Active files
 
-**New source** — `backend/src/worker/{index,db,jobs}.ts`; `backend/src/ops/job-runs.ts`;
+**Second session of 2026-10-14** — new: `backend/src/ops/audit-anchor.ts`,
+`backend/scripts/storage-probe.ts`, `backend/migrations/0016_audit_chain_reader.sql`,
+`backend/tests/unit/audit-anchor.test.ts`, `backend/tests/db/audit-chain.test.ts`,
+[the session handoff](docs/engineering/handoffs/2026-10-14-audit-chain-and-anchor.md). Modified:
+`backend/src/files/storage-s3.ts` (a second bucket's config; the interop result replaces its "NOT
+VERIFIED" header), `backend/src/audit.ts` (the chain lock), `backend/src/worker/jobs.ts` (the anchor
+upload), `backend/package.json`, `backend/.env.example`,
+`docs/architecture/DEPLOYMENT_AND_OPERATIONS.md`, `docs/engineering/PROJECT_STATUS.md`, this file.
+
+**First session of 2026-10-14** — new source: `backend/src/worker/{index,db,jobs}.ts`; `backend/src/ops/job-runs.ts`;
 `backend/src/routes/{audit,owner-dashboard,reports,system-detail}.ts`; `backend/src/ops/reports.ts`;
 `backend/src/files/storage-s3.ts`; `backend/migrations/0015_operations.sql`.
 
@@ -242,28 +270,46 @@ The four things worth carrying in your head:
 - **A migration file cannot be edited once applied.** `migrate.ts` records a sha256 per migration and
   **refuses a changed file** ("Add a new migration instead of editing history"), so 0015's one
   cosmetic wart — a comment that says `pending_anchors` above the `audit_anchors` table — stays.
-  The file's hash was verified against both `ia_test` and `ia_dev` after this session's edits.
-- **Inline `npx tsx -e "<script with top-level await>"` silently does nothing** — no error, no effect,
-  so a probe appears to pass because it never ran. Write a real temporary `.mts` file, run it, delete
-  it.
+  The file's hash was verified against both `ia_test` and `ia_dev` after this session's edits.- **Inline `npx tsx -e "<script with top-level await>"` silently does nothing** — no error, no effect,
+  so a probe appears to pass because it never ran. Write a real temporary `.mts` file, run it, delete it.
+- **MinIO's community binaries are gone.** `dl.min.io` answers `410 Gone` ("the open-source MinIO
+  Server … projects are archived and no longer maintained"). The M8 handoff's "confirm against MinIO
+  or R2" is no longer actionable as written: use `rclone serve s3` locally, or the real bucket.
+- **The forked audit chain was diagnosed late because two plausible theories came first.** The
+  concurrency explanation was *real* — and fixable, and fixed — but it was not what produced the
+  failure in the integration suite. What settled it was instrumenting the real path and reading the
+  data: two login transactions, different xids, the second seeing `rowsInTable=0` on a table that had
+  a committed row. That is impossible under concurrency alone, and it pointed straight at RLS (only
+  owners may read `audit_logs`, and the trigger read as the writer). *A theory that explains the
+  symptom is not a diagnosis until the data says so.*
+- **A wedged local PostgreSQL cluster.** The suite's first run this session reported 240 tests
+  **skipped**, not failed: the cluster's backend had died (`0xC0000142`), the postmaster reinitialised
+  and then stopped answering — `npm run db:status` still said "running". `npm run db:down &&`
+  `npm run db:up` cleared it and both databases were intact. If everything is skipped, suspect the
+  database before the tests.
+- **A test that passed for the wrong reason.** `tests/unit/audit-anchor.test.ts` cleared only the
+  anchor's own variables, so the machine's `.env` supplied `STORAGE_*` and the "does not inherit the
+  files bucket" assertion passed against a fallback it did not have. It now clears both sets. Also
+  worth noting: the anchor's first implementation *did* inherit `STORAGE_BUCKET` — the corrected test
+  failed and found it.## 10. Next steps, in order
 
-## 10. Next steps, in order
-
-1. **Commit the M8 work** (32 paths) — the endpoints, the worker, the storage adapter, the Dockerfile,
-   CI, the tests and the documentation. Permission is recorded in §6.
-2. **Confirm the S3 driver against MinIO or R2**, then set `STORAGE_DRIVER=s3` nowhere else until it
-   is proven. This is the only new artefact with an unverified boundary.
-3. **Watch CI once** (needs a remote, §5.8). The workflow has never executed.
-4. **M7 the moment §5.1 arrives:** run spike S1 first, record its real values in
-   `OPENWA_INTEGRATION` §2, then build `message_jobs` and the provider. The two endpoints already
-   written to say `unknown` (`SYS-03`) and zero (`DSH-01`) are the places to surface its counts. Do
-   not write against guessed OpenWA behaviour.
-5. **M9:** performance sanity (5k invoices / 20k attendance rows < 300 ms p95 — never measured),
+1. **Push so CI runs once** (needs a remote, §5.8). The workflow has never executed and now covers
+   260 tests.
+2. **Run `npm run storage:probe` and `npm run storage:probe -- --anchor` against the real bucket**
+   before anything is deployed into it, and decide the provider (`OPEN-016`). The driver's interop is
+   proven against a local S3 server; virtual-host addressing is not, and no production provider has
+   been spoken to.
+3. **M7 the moment §5.1 arrives:** run spike S1 first, record its real values in `OPENWA_INTEGRATION`
+   §2, then build `message_jobs` and the provider. The two endpoints already written to say `unknown`
+   (`SYS-03`) and zero (`DSH-01`) are the places to surface its counts. Do not write against guessed
+   OpenWA behaviour.
+4. **M9:** performance sanity (5k invoices / 20k attendance rows < 300 ms p95 — never measured; the
+   audited-write path is now serialised on one lock, so measure a write endpoint rather than assume),
    the security review gate, accessibility, the real-device pass, a bug bash on anonymised real data.
-6. **Close the small operational gaps the worker made visible:** surface the invoice-health findings
-   on `SYS-03` (needs one more optional field, precedent in the M8 handoff §4.2), the maintenance
-   flag the documented rollback path (b) needs, and `AUDIT_ANCHOR_BUCKET` actually uploading.
-7. **Owner items** (§5) and **contract text** (§3 item 6) whenever they land; neither blocks
+5. **The two small operational gaps left** — surface the invoice-health findings on `SYS-03` (needs
+   one more optional field, precedent in the M8 handoff §4.2) and the maintenance flag the documented
+   rollback path (b) needs. `AUDIT_ANCHOR_BUCKET` uploading is **done** (§3).
+6. **Owner items** (§5) and **contract text** (§3 item 6) whenever they land; neither blocks
    development.
 
 ## 11. What actually stands between here and production
@@ -278,7 +324,7 @@ M9–M10 — checked against what the code actually is today.
 
 | # | Gate | State today |
 |---|---|---|
-| 1 | CI green on the release commit | **Reachable, not observed.** `.github/workflows/ci.yml` exists (typecheck, build, contract, the full suite against a real PostgreSQL, and the documentation tools) but there is no remote and no runner, so it has never executed. The suite is green *locally*: 240/240, exit 0 |
+| 1 | CI green on the release commit | **Reachable, not observed.** `.github/workflows/ci.yml` exists (typecheck, build, contract, the full suite against a real PostgreSQL, and the documentation tools) but there is no remote and no runner, so it has never executed. The suite is green *locally*: 260/260, exit 0 |
 | 2 | E2E smoke on staging (login, register, attendance, clock in/out, billing run, payment + receipt, `PRF-04` queue, WhatsApp via mock, void) | **Not possible — nothing is deployed, there is no staging** |
 | 3 | T-FIL-09 and T-MSG-02/03/06 pass | T-FIL-09 **passes**; **every T-MSG row is blocked** (M7 unbuilt) |
 | 4 | OpenWA spike S1 (O18–O22) + T-MSG-12 on the real number | **Not started** — needs the number (§5.1) |
@@ -293,14 +339,17 @@ M9–M10 — checked against what the code actually is today.
 
 1. ~~No worker process and no scheduler~~ — **built.** `npm run worker` runs eight daily/interval jobs
    under a per-job advisory lock, including the daily billing scheduler and the PDF sweeper.
-2. ~~Storage is a local directory~~ — **a port with a local and an S3 driver**. The S3 driver's
-   interop with a real bucket is **unproven** (§3.2), and the bucket/provider decision (`OPEN-016`) is
-   still the owner's.
+2. ~~Storage is a local directory~~ — **a port with a local and an S3 driver**. Its interop is now
+   **proven against a real S3 server** (`rclone serve s3`, including the negative that a forged
+   signature is refused); what remains unproven is **virtual-host addressing** and a specific
+   production provider. The bucket/provider decision (`OPEN-016`) is still the owner's, and the
+   probe is on the go-live checklist so this cannot be taken on trust.
 3. ~~No immutable image and no deploy artefacts~~ — **a `Dockerfile`** (one image, two entrypoints,
    non-root, no secrets, a `/health` `HEALTHCHECK`) and **a CI workflow**. Still missing: reverse-proxy
    and TLS config, and the **maintenance flag** the documented rollback path (b) needs.
 4. ~~No invariant job~~ — **built** (`ops.invariant_nightly`): invoice arithmetic, allocations, orphan
-   counts and the **audit hash chain**, re-anchored nightly.
+   counts and the **audit hash chain**, re-anchored nightly — and the anchor now **uploads to
+   `AUDIT_ANCHOR_BUCKET`**, so the nightly verification leaves the database it attests to.
 5. **Observability is still logs only.** `SENTRY_DSN` is documented but unwired, there are no metrics,
    no uptime monitor and no daily digest (OPEN-012). `SYS-03` now exists to look at, but nothing
    alerts on it.
@@ -316,9 +365,10 @@ the real-device pass · the handover pack and owner training · the real player 
 
 ### D. The shortest honest path
 
-1. **Commit**, then **push** so CI runs once. Nothing can be released cleanly from an unobserved
+1. **Push** so CI runs once (the commit is done). Nothing can be released cleanly from an unobserved
    pipeline.
-2. **Prove the S3 driver** against MinIO/R2, and decide the bucket (`OPEN-016`).
+2. **Prove the S3 driver against the real provider** (`npm run storage:probe`, `-- --anchor`), and
+   decide the bucket (`OPEN-016`).
 3. **M7** the moment the number arrives — spike S1 first, per the plan.
 4. **M9:** performance sanity, security review, accessibility, the real-device pass, a bug bash on
    anonymised real data.
@@ -339,6 +389,8 @@ details. **Guardian-facing automation is the expensive half, not the money engin
 
 Money, documents, the dashboard, the reports, the audit trail and the system page all work and are
 tested; **messaging is the only missing feature and it is waiting on a phone number**, not on code;
-the worker, the storage adapter, the invariant job, the image and CI now exist. What stands between
-here and production is a **push so CI has ever run**, **a proven S3 boundary**, an unproven restore, a
-security review, no deployed environment, and the owner items in §5.
+the worker, the storage adapter, the invariant job, the off-host audit anchor, the image and CI now
+exist, and the audit chain is a chain again. What stands between here and production is a **push so CI
+has ever run**, **the S3 boundary proven against the real bucket** (a local server has answered, not a
+production provider), an unproven restore, a security review, no deployed environment, and the owner
+items in §5.
