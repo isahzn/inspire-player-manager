@@ -13,7 +13,7 @@ import { safeNext } from "@/lib/permissions";
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const { login, status } = useAuth();
+  const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [totpCode, setTotpCode] = useState("");
@@ -136,7 +136,12 @@ function LoginForm() {
 
           <button
             type="submit"
-            disabled={pending || status === "loading"}
+            // Deliberately NOT gated on the auth `status`: the server renders this form
+            // before /auth/me can resolve, so a `status === "loading"` term makes the
+            // button `disabled` in the SSR HTML and enabled on hydration — a mismatch
+            // React reports and does not patch, leaving the button stuck disabled. The
+            // submit itself is safe to press at any status.
+            disabled={pending}
             className="touch44 h-12 w-full cursor-pointer rounded-xl bg-pitch-600 font-semibold text-white hover:bg-pitch-700 disabled:opacity-60"
           >
             {pending ? "Signing in…" : "Sign in"}

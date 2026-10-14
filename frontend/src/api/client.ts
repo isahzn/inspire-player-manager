@@ -60,7 +60,9 @@ import type {
   Session,
   SessionAttendance,
   SessionStatus,
+  ScheduleGenerateResult,
   SystemHealth,
+  TrainingSchedule,
   User,
 } from "./types";
 
@@ -597,6 +599,66 @@ export function ses01ListSessions(params: {
 
 /** SES-02. `startsAt`/`endsAt` are UTC instants; the form converts the academy
  *  wall-clock time with `academyLocalToInstant` (ATTENDANCE §2). */
+/** SCH-01 read — the recurring rules. `includeInactive` shows deactivated ones too. */
+export function sch01ListSchedules(params: {
+  ageGroupId?: string;
+  includeInactive?: boolean;
+} = {}): Promise<{ data: TrainingSchedule[] }> {
+  return apiRequest(
+    `/training-schedules${qs({
+      ageGroupId: params.ageGroupId,
+      includeInactive: params.includeInactive ? true : undefined,
+    })}`
+  );
+}
+
+/** SCH-01 create. Times are academy-local `HH:mm`; `weekday` is ISO 1–7. */
+export function sch01CreateSchedule(input: {
+  ageGroupId: string;
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  venue?: string;
+  validFrom: string;
+  validTo?: string;
+}): Promise<TrainingSchedule> {
+  return apiRequest("/training-schedules", { method: "POST", body: input });
+}
+
+/** SCH-01 update. Omitted fields are left unchanged (the server distinguishes undefined). */
+export function sch01UpdateSchedule(
+  id: string,
+  patch: {
+    startTime?: string;
+    endTime?: string;
+    venue?: string;
+    validFrom?: string;
+    validTo?: string;
+    isActive?: boolean;
+  }
+): Promise<TrainingSchedule> {
+  return apiRequest(`/training-schedules/${id}`, { method: "PATCH", body: patch });
+}
+
+/** SCH-01 deactivate — existing sessions are untouched; only future generation stops. */
+export function sch01DeactivateSchedule(id: string): Promise<TrainingSchedule> {
+  return apiRequest(`/training-schedules/${id}/deactivate`, { method: "POST", body: {} });
+}
+
+/** SCH-02. Idempotent: the same range cannot create a second batch (API_CONTRACTS §3.5). */
+export function sch02GenerateSessions(
+  id: string,
+  input: { from: string; to: string },
+  key: string = idempotencyKey()
+): Promise<ScheduleGenerateResult> {
+  return apiRequest(`/training-schedules/${id}/generate`, {
+    method: "POST",
+    body: input,
+    idempotencyKey: key,
+  });
+}
+
+/** SES-02 wrapper below (kept in contract order). */
 export function ses02CreateSession(input: {
   ageGroupId: string;
   startsAt: string;

@@ -26,6 +26,7 @@
     "migrate": "tsx scripts/migrate.ts",
     "migrate:seed": "tsx scripts/migrate.ts --seed",
     "seed": "tsx scripts/migrate.ts --seed",
+    "seed:demo": "tsx scripts/seed-demo.ts",
     "db:setup": "npm run bootstrap && npm run migrate:seed",
     "create-owner": "tsx scripts/create-owner.ts",
     "reset-owner": "tsx scripts/reset-owner.ts",

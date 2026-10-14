@@ -1,9 +1,12 @@
 # handoff.md — read this one first
 
-> **Updated:** 2026-10-14 (fourth session of the day: **the backend is deployed and running on the
-> VPS** — §2 has the measured state, §12 the session, §5 the two things that now block real use) ·
-> **Owner granted standing permission** (§6) — ordinary development, local infrastructure and
-> commits need no further approval.
+> **Updated:** 2026-10-14 (fifth session of the day: **the frontend is out of mock mode and running
+> against the real API**, with a demo seed (owner `huzzam`, coach `demo1`, password `12345`) and the
+> **recurring Tuesday/Thursday 16:00–17:30 training schedule** that automates sessions — §14 has the
+> frontend-to-production steps, and
+> [the session handoff](docs/engineering/handoffs/2026-10-14-frontend-prod-and-schedules.md) the
+> detail) · **Owner granted standing permission** (§6) — ordinary development, local infrastructure
+> and commits need no further approval.
 >
 > This file is the whole picture: what works, what is broken, what only a person can supply, and the
 > exact next actions. The milestone records live in
@@ -710,3 +713,80 @@ nightly dump that has been **restored**, and a live invite for the owner waiting
 record** for `inspire-player.lk`. What stands between here and production is that **one DNS entry**,
 TLS, an off-host copy of the dumps and the payment proofs, a security review, and the owner items in
 §5.
+
+## 14. This session — the frontend comes off mock mode, and sessions automate
+
+**What was asked:** switch the UI from its MSW mocks to the real API; keep exactly two accounts —
+owner **`huzzam`** and coach **`demo1`**, password `12345`; make the training **sessions automatic**
+(Tuesday and Thursday, 16:00–17:30, for every age group, owner-editable); and let the owner **assign
+coaches to age groups** so a coach sees the sessions in their groups. Full detail:
+[the session handoff](docs/engineering/handoffs/2026-10-14-frontend-prod-and-schedules.md).
+
+### 14.1 What is now true, with evidence
+
+| Check | Result |
+|---|---|
+| `frontend` typecheck / lint / **build with mocks off** | exit 0 / 0 warnings / exit 0 — all 35 routes, `/schedules` included. The build is the check that failed in mock-only history (§12.7) |
+| `backend` `npx tsc --noEmit` · `npm run migrate` · `npm run seed:demo` | exit 0 · applied `0017` · **owner created, coach created, 40 other users removed, 3 age groups, 6 schedules, 96 sessions** |
+| **Browser (real Chrome, prod mode, live API)** | `ALL PASS` — the schedules page renders the rules, the age groups list, the sessions page shows the generated dates, `demo1` sees **only** the groups assigned to them |
+| `POST /auth/login` for `huzzam` and `demo1` (`12345`) | **200** with a session cookie |
+| `GET /training-schedules` | 6 rules — Tue + Thu, 16:00–17:30, Under-11/14/17 |
+| `POST /coach-assignments` → `GET /coaches` | `demo1` ends up with **two** groups; the coach's own `GET /sessions` returns only those two, never the third |
+| `POST /training-schedules/{id}/generate` | `{"created":0,"skipped":4}` on a filled range, `{"created":4,"skipped":0}` on an empty one — idempotent, exactly as the contract says |
+
+**The recurring schedule already existed in the backend** (SCH-01/02, M4); what was missing was a
+screen for it — `/schedules` was a "coming soon" placeholder with no API wrappers. This session added
+both, plus the demo seed that creates the Tuesday/Thursday rule for every group.
+
+### 14.2 The one real defect the switch exposed — and it was a login blocker
+
+`app/login/page.tsx` disabled the submit button on `status === "loading"`. The server cannot know
+the auth status during SSR, so it rendered `disabled` while the client hydrated `disabled={false}`:
+React reports that mismatch and **does not patch it**, leaving the button permanently disabled — no
+one could log in. **Mock mode had hidden it**, because `Providers` renders nothing until MSW starts,
+so the login form was never server-rendered; prod mode is exactly what revealed it. The button is
+now gated on `pending` only, and both logins were driven through the real browser UI afterwards.
+
+### 14.3 The demo seed — `npm run seed:demo`
+
+`backend/scripts/seed-demo.ts` puts a database into the state the owner described: the two accounts
+active with a known password, the age groups, the Tue + Thu 16:00–17:30 schedule for each group, and
+the sessions it generates (±56 days). It is re-runnable (accounts update in place, groups/schedules
+matched by natural key, generation `on conflict do nothing`) and **it is not run by any deploy** —
+`create-owner` remains the production path.
+
+**The password is `12345`, which is deliberately below the 12-character policy.** The policy is
+enforced on the API path (accept-invite / change-password); the seed hashes with the same argon2id
+parameters directly. This is an owner instruction for a demo, and the script prints a warning saying
+so. **Do not run it against a publicly reachable database.**
+
+### 14.4 Frontend to production — the exact steps
+
+Nothing here is new code; it is the checklist the owner asked for.
+
+1. **Build-time config needs no change.** `frontend/Dockerfile` already defaults
+   `NEXT_PUBLIC_USE_MOCKS=false` and `NEXT_PUBLIC_API_BASE_URL=/api/v1` (relative, same origin as the
+   API), so the production bundle is already mock-free. Verify it after any rebuild by grepping the
+   served bundles for `msw` (§12.7 does this from outside the box).
+2. **Local dev is now prod-mode too.** `frontend/.env.local` holds `NEXT_PUBLIC_USE_MOCKS=false` and
+   `NEXT_PUBLIC_API_BASE_URL=http://localhost:3200/api/v1` (both files git-ignored). Unset/blank to
+   go back to mocks.
+3. **On the VPS**, rebuild and restart the `ia_web` service from the updated source, then run the
+   seed against the production database:
+   `docker compose -f docker-compose.prod.yml --profile localdb exec ia_api npm run seed:demo`
+   (or `create-owner` if a weak demo password is refused on the real box).
+4. **Still blocked on the owner:** the **A record** for `inspire-player.lk` → `93.127.141.71` (§5),
+   after which the invite link already issued can be opened; then HTTPS (one Caddyfile line +
+   `COOKIE_SECURE=true`).
+
+### 14.5 Honest gaps
+
+- **`seed-demo` has no automated test.** Its evidence is that it was run twice (create then
+  idempotent), not a Vitest case.
+- **No mock handler was added for `/training-schedules`.** Mock mode is being retired, so the screen
+  is expected to show its error state if it is ever opened with mocks on. Restoring mock mode means
+  rebuilding that slice.
+- **The VPS was not touched.** Deploying needs a separate explicit go-ahead (standing permission, §6)
+  and is pointless until DNS resolves; the steps above are the whole gap.
+- **Everything else in §5 stands** — real age groups and fees, the academy's details and bank
+  instructions, and the `create-owner` + TOTP handover.

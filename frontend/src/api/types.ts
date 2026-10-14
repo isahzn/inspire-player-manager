@@ -324,6 +324,30 @@ export interface Session {
   version: number;
 }
 
+/**
+ * SCH-01 `TrainingSchedule` — a recurring rule, never the sessions themselves.
+ * `weekday` is ISO (1 = Monday … 7 = Sunday); `startTime`/`endTime` are academy-local
+ * `HH:mm` wall-clock strings. Creating or editing a rule rewrites no existing session;
+ * only SCH-02 generates (API_CONTRACTS §3.5).
+ */
+export interface TrainingSchedule {
+  id: string;
+  ageGroup: { id: string; name: string };
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  venue?: string;
+  validFrom: DateStr;
+  validTo?: DateStr;
+  isActive: boolean;
+}
+
+/** SCH-02 response — created vs already-existing sessions in the requested range. */
+export interface ScheduleGenerateResult {
+  created: number;
+  skipped: number;
+}
+
 export type AttendanceStatus = "present" | "absent" | "late" | "excused";
 
 /** One roster line. `record` is absent while the player is unmarked. */
