@@ -77,6 +77,15 @@ Separate secrets, databases, buckets, and domains per environment. Prod data is 
 
 `.env.example` (committed) lists names with dummy values. The backend refuses to start if a required variable is missing/weak (e.g., secret < 32 bytes).
 
+**Implemented as.** The names above are the shipped ones except where noted, and `backend/.env.example` is the reproduction of this table — read it for the exact list.
+
+| Spec name | As implemented |
+|---|---|
+| Object storage (`STORAGE_ENDPOINT`…`STORAGE_SECRET_ACCESS_KEY`) | Present as documented. `STORAGE_DRIVER` and `STORAGE_PREFIX` were **added** by the implementation: `local` (a private directory under `FILES_DIR`, the default) or `s3` (an S3-compatible bucket). The two drivers are one port in `src/files/storage.ts` with the bucket in `src/files/storage-s3.ts`, which is what keeps "the provider choice is one file" true ([OPEN-016](../engineering/OPEN_DECISIONS.md)). `STORAGE_DRIVER=s3` with a missing variable is a **startup failure**, never a silent fall back to a directory nobody backs up |
+| `DATABASE_MIGRATOR_URL` "api,worker / CI" | The API never opens it. The **worker** does, and only the worker: its jobs are not user actions, so there is no session to authenticate and no per-user RLS context to fake — the same reasoning that already governs `create-owner`/`reset-owner` |
+| Worker and retention knobs | `WORKER_TICK_MS`, `WORKER_HEARTBEAT_MS`, `WORKER_STUCK_MINUTES`, `WORKER_STALE_MINUTES`, `BACKUP_DIR` and `RETENTION_*` are implementation details this table did not name; they are listed in `.env.example` and are candidates for a spec line |
+| Deployment artefacts | `backend/Dockerfile` builds **one immutable image** for both processes: the API is the default entrypoint, the worker is `-e APP_ENTRY=dist/src/worker/index.js`. `.github/workflows/ci.yml` is what makes gate item 1 ("CI green on the release commit") reachable |
+
 ## 5. Release procedure (backend)
 
 1. CI green on the release commit (lint, types, unit, integration, DB-constraint, contract, security tests; see release gate).
@@ -136,6 +145,19 @@ Log retention: 30 days hot; no PII beyond ids and masked phones.
 | Logical backup | nightly 01:00 (host cron or provider) |
 
 If the worker is down, nothing is lost: next run catches up per the rules in [BILLING_ENGINE](BILLING_ENGINE.md) §9.
+
+**Implemented as.** The worker is `src/worker/index.ts` (started with `APP_ENTRY=dist/src/worker/index.js`); the API process is unchanged. The jobs are registered by stable name, and each one leaves a row in **`job_runs`** (migration `0015_operations.sql`) naming the job, its outcome and what it did — that table is the evidence `GET /system/health` reads, so "the worker is running" is something an operator can look at rather than an assertion.
+
+| Job | As implemented |
+|---|---|
+| Billing scheduler | `billing.scheduler`, daily. **Idempotent through `job_runs`**: a partial unique index on `(job, run_key)` means "already ran for this academy-local date" is enforced by the database, not remembered by the process. It issues through the existing engine (`BIL-02`'s path), never a second implementation |
+| Session generation, reminder enqueue, message consumer, OpenWA health | `sessions.generate` is built. The other three — `messages.reminder_enqueue`, `messages.queue_consumer`, `openwa.health` — are **registered but recorded as `skipped`** with the reason, because M7 is blocked on a dedicated phone number and nothing may be written against guessed provider behaviour |
+| PDF sweeper | `files.pdf_sweeper`, interval. Rebuilds what `pdf_stale` flags, through `INV-07`'s own render path |
+| Stuck-job and orphan-file sweepers | `ops.stuck_jobs` / `files.orphan_sweeper`. The stuck pass closes a `running` row older than `WORKER_STUCK_MINUTES` as `failed`, which is also what stops a crashed run from ever being counted as done |
+| Invariant verification, audit-chain verify + anchor | `ops.invariant_nightly`. Checks the money invariants of §6, recomputes the audit hash chain, and records the verified head in `audit_anchors`. `AUDIT_ANCHOR_BUCKET` upload is **not** implemented — the anchor row is the local record of what was verified |
+| Retention/purge | `ops.retention_purge`. Prunes operational history only (job runs, idempotency keys, expired capability tokens, elapsed health rows). Financial rows are never deleted; `RETENTION_FINANCIAL_YEARS` is a reporting threshold, not a delete |
+| Logical backup | `ops.logical_backup` writes `pg_dump` into `BACKUP_DIR` and records itself. **Shipping it off-host is the operator's step** (§7) — the job proves the dump was produced, not that it is recoverable |
+| Worker heartbeat | `worker.heartbeat` touches the single `worker_heartbeats` row every minute; §6's 5-minute staleness alert is computed from it |
 
 ## 9. First-time setup, handover
 

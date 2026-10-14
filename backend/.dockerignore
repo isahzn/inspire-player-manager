@@ -1,0 +1,24 @@
+# Keep the build context to source only. `node_modules` and `dist` are produced inside the
+# image (npm ci / tsc), and nothing else here is needed by a stage.
+node_modules
+dist
+build
+coverage
+
+# Local runtime state: generated PDFs, uploaded logos and proofs, logs, CLI scratch files.
+var
+.pgdata
+*.log
+
+# Secrets never enter an image (SECURITY_AND_PRIVACY §5).
+.env
+.env.*
+!.env.example
+
+# Not needed to build or run.
+tests
+vitest.config.ts
+.git
+.gitignore
+.dockerignore
+Dockerfile
