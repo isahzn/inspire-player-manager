@@ -1,5 +1,10 @@
 # handoff.md — read this one first
 
+> **Owner decision (2026-10-15): WhatsApp / M7 is deliberately deferred.** It is the **only unbuilt
+> feature**, the owner will configure it later on their own schedule, and its absence is not a defect
+> in anything else — see §17. Everything else that is *built* is verified in §12–§16; the go-live
+> items in §5 and §16.6 are still open and are not affected by the deferral.
+>
 > **Updated:** 2026-10-15 (sixth session: **the login form can no longer put the password in the
 > URL** — the gap §14.2's first repair left — with a permanent guard,
 > `npm run verify:login-guard`; §15 · and **the VPS was redeployed from today's source and now has the
@@ -1012,3 +1017,23 @@ From outside the box, over Caddy (`Host: inspire-player.lk`, `Origin: http://ins
   the payment proofs** — unchanged from §5.
 - **The invite anomaly in 16.1 is unexplained.** It was not reproduced and should be looked at on a
   copy of the database, not guessed at.
+
+---
+
+## 17. Owner decision — WhatsApp is deferred, and it is the only missing feature
+
+On 2026-10-15 the owner instructed that **WhatsApp (M7) will be configured later** and that the
+handoff should say so. Recorded exactly as instructed, with the boundary stated so nobody reads it as
+"everything is finished":
+
+- **Deferred, not cancelled:** M7 is still the only feature this system does not have. Nothing else is
+  waiting on it, and no other module is a stub or a placeholder because of it.
+- **What it still needs when the owner picks it up** (unchanged from §5 and the M7 note in
+  [PROJECT_STATUS](docs/engineering/PROJECT_STATUS.md)): a dedicated number, **spike S1 run first**
+  against the real gateway — never written against guessed OpenWA behaviour — and the gateway paired
+  on the VPS. The `MessagingService` port, the provider adapter, the queue and the mock provider are
+  already in place, so the work is the adapter's real behaviour plus pairing, not the architecture.
+- **Still true after the deferral:** the go-live items in §5 and §16.6 — DNS, TLS, real age groups and
+  fees, a real password, off-host backups, the security review — and the unmeasured M9 pass. "No
+  WhatsApp" is the *only* thing the owner has chosen to leave; the rest is not chosen, it is simply
+  not done yet.
