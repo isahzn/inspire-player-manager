@@ -4,11 +4,13 @@
 // server says TOTP required. Never reveals which field is wrong.
 // Username is the login identifier (ADR-018) — there is no email credential.
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useState } from "react";
+import { Suspense, useState, useSyncExternalStore } from "react";
 import { Trophy } from "lucide-react";
 import { ApiError } from "@/api/client";
 import { useAuth } from "@/lib/auth";
 import { safeNext } from "@/lib/permissions";
+
+const subscribeNever = () => () => {};
 
 function LoginForm() {
   const router = useRouter();
@@ -20,6 +22,22 @@ function LoginForm() {
   const [needTotp, setNeedTotp] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  // The button stays disabled until the client has hydrated, and the server renders
+  // it that way too, so the two agree (no hydration mismatch) and the disabled
+  // default button blocks the browser's implicit submit. Without this, a submit
+  // before hydration is a NATIVE form submission, and the only method a form has
+  // by default is GET — which puts the password in the URL, the history entry and
+  // the referrer. `disabled={pending}` alone cannot prevent that: it is false in
+  // the SSR HTML.
+  //
+  // `useSyncExternalStore` is the hydration-safe way to ask "is the client live?":
+  // React renders the server snapshot during hydration and swaps to the client one
+  // after, so no effect (and no `setState` in one) is involved.
+  const hydrated = useSyncExternalStore(
+    subscribeNever,
+    () => true,
+    () => false,
+  );
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -136,12 +154,12 @@ function LoginForm() {
 
           <button
             type="submit"
-            // Deliberately NOT gated on the auth `status`: the server renders this form
-            // before /auth/me can resolve, so a `status === "loading"` term makes the
-            // button `disabled` in the SSR HTML and enabled on hydration — a mismatch
-            // React reports and does not patch, leaving the button stuck disabled. The
-            // submit itself is safe to press at any status.
-            disabled={pending}
+            // NOT gated on the auth `status`: the server renders this form before
+            // /auth/me resolves, so a `status === "loading"` term makes the SSR HTML
+            // `disabled` and hydration `enabled` — a mismatch React reports and does
+            // not patch, leaving the button stuck disabled. `hydrated` cannot drift
+            // that way: it is false on the server AND on the first client render.
+            disabled={!hydrated || pending}
             className="touch44 h-12 w-full cursor-pointer rounded-xl bg-pitch-600 font-semibold text-white hover:bg-pitch-700 disabled:opacity-60"
           >
             {pending ? "Signing in…" : "Sign in"}

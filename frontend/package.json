@@ -13,6 +13,7 @@
     "verify:e2e:step5": "node .verify/step5-e2e.mjs",
     "verify:e2e:step678": "node .verify/step678-e2e.mjs",
     "verify:unit": "vitest run",
+    "verify:login-guard": "node .verify/login-guard.mjs",
     "verify:links": "node .verify/dead-links.mjs",
     "typecheck": "tsc --noEmit"
   },

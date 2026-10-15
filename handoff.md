@@ -1,9 +1,11 @@
 # handoff.md — read this one first
 
-> **Updated:** 2026-10-14 (fifth session of the day: **the frontend is out of mock mode and running
-> against the real API**, with a demo seed (owner `huzzam`, coach `demo1`, password `12345`) and the
-> **recurring Tuesday/Thursday 16:00–17:30 training schedule** that automates sessions — §14 has the
-> frontend-to-production steps, and
+> **Updated:** 2026-10-15 (sixth session: **the login form can no longer put the password in the
+> URL** — the gap §14.2's first repair left — with a permanent guard,
+> `npm run verify:login-guard`; §15) · previously 2026-10-14 (fifth session: **the frontend is out of
+> mock mode and running against the real API**, with a demo seed (owner `huzzam`, coach `demo1`,
+> password `12345`) and the **recurring Tuesday/Thursday 16:00–17:30 training schedule** that
+> automates sessions — §14 has the frontend-to-production steps, and
 > [the session handoff](docs/engineering/handoffs/2026-10-14-frontend-prod-and-schedules.md) the
 > detail) · **Owner granted standing permission** (§6) — ordinary development, local infrastructure
 > and commits need no further approval.
@@ -744,8 +746,10 @@ both, plus the demo seed that creates the Tuesday/Thursday rule for every group.
 the auth status during SSR, so it rendered `disabled` while the client hydrated `disabled={false}`:
 React reports that mismatch and **does not patch it**, leaving the button permanently disabled — no
 one could log in. **Mock mode had hidden it**, because `Providers` renders nothing until MSW starts,
-so the login form was never server-rendered; prod mode is exactly what revealed it. The button is
-now gated on `pending` only, and both logins were driven through the real browser UI afterwards.
+so the login form was never server-rendered; prod mode is exactly what revealed it. Both logins were
+driven through the real browser UI afterwards. **The first repair — gating on `pending` only — was
+itself incomplete and was corrected in §15**: with nothing holding it disabled before hydration, a
+submit in that window is a native GET and the password lands in the URL.
 
 ### 14.3 The demo seed — `npm run seed:demo`
 
@@ -790,3 +794,84 @@ Nothing here is new code; it is the checklist the owner asked for.
   and is pointless until DNS resolves; the steps above are the whole gap.
 - **Everything else in §5 stands** — real age groups and fees, the academy's details and bank
   instructions, and the `create-owner` + TOTP handover.
+
+---
+
+## 15. This session — the password that ended up in the URL, and where a forgotten password isn't
+
+**What was asked:** whether anything was still in flight, and (arriving mid-check) that the owner had
+changed a password "in the env" and could no longer remember it. There is no leftover task; the
+answer to the second question is in §15.3. Verifying the first question is what exposed the defect
+below — the previous session's login fix was incomplete, and its own claim that "the submit itself is
+safe to press at any status" was wrong.
+
+### 15.1 The defect — a password in the address bar
+
+React attaches `onSubmit` at **hydration**. Before that, the login form is plain HTML, and a form's
+default method is **GET** — so pressing Enter (or clicking Sign in) on a not-yet-hydrated page does a
+**native** submission and lands on `/login?username=…&password=…`: the credential is then in the
+address bar, the browser's history, and the `Referer` header of anything that page loads. §14.2's fix
+removed the disabled guard but replaced it with `disabled={pending}`, which is `false` in the
+server-rendered HTML — so nothing held that window shut.
+
+**Measured, not reasoned about** (`npm run verify:login-guard`, which withholds every JS chunk so the
+page under test is exactly the server-rendered HTML):
+
+| | Before | After |
+|---|---|---|
+| The server-rendered submit button is disabled | **no** (`disabled=false`) | **yes** |
+| Enter on the un-hydrated page → URL | `/login?username=huzzam&password=12345` | `/login` |
+| The button enables once hydrated | yes | yes (not stranded) |
+
+The guard **failed on the old button and passed on the new one** — it was run against both, on
+purpose, because a guard nobody has watched fail is a guard nobody can trust.
+
+### 15.2 The fix, and why it is shaped this way
+
+`app/login/page.tsx` gates the button on `!hydrated || pending`, where `hydrated` comes from
+`useSyncExternalStore(subscribeNever, () => true, () => false)`. Three properties matter:
+
+1. **No hydration mismatch.** The server snapshot is `false` and so is the first client render, so
+   the HTML cannot disagree with the client. The earlier `status === "loading"` term failed exactly
+   here — the server could not know the auth status.
+2. **The native path is closed, including Enter.** A disabled *default* button suppresses implicit
+   form submission, so this is not only about the click target.
+3. **No `setState` in an effect.** The first attempt used `useEffect(() => setHydrated(true), [])` and
+   the project's own lint rule (`react-hooks/set-state-in-effect`) rejected it — the rule was obeyed
+   by changing the approach, not by disabling the rule.
+
+`useSyncExternalStore`'s subscribe function is a no-op: the store never changes, it is only being
+asked "is the client live?".
+
+### 15.3 "I changed the password in the env" — that variable is read by nothing
+
+Measured on this machine, now:
+
+- `backend/.env` still reads `DEV_OWNER_USERNAME=huzzam` / `DEV_OWNER_PASSWORD=12345`.
+- **`DEV_OWNER_PASSWORD` is read by nothing.** `grep -rn DEV_OWNER backend/src backend/scripts
+  backend/db backend/migrations` → no readers; and no code reads any `*_PASSWORD` environment
+  variable at all. Editing it changes no login. This was already noted in §12's predecessor text as
+  "worth deleting from the template" — it is now confirmed and is the likeliest reason a password
+  edit "didn't take".
+- The two demo accounts on this machine still verify against `12345` (argon2 `verifyPassword`),
+  both `updated_at` 2026-10-14 23:09 — i.e. the seed's last run. Nothing local was changed.
+- **Passwords are argon2id and are not recoverable.** If a password was changed *inside the app*
+  (profile → change password) or via `seed:demo -- --password …`, the set value exists only as a
+  hash. The recovery paths are `npm run reset-owner -- --username <name>` (a 72 h single-use link,
+  revokes sessions, leaves TOTP alone) or re-running `npm run seed:demo -- --password <new>`.
+
+**What is still unknown and is the owner's to answer:** *where* the change was made. If it was the
+`.env` on the deployed VPS, the value is still sitting in that file (`grep -n DEV_OWNER_PASSWORD
+.env` on the box) and no reset is needed — but it also never took effect, so the real password there
+is whatever was last set through the app.
+
+### 15.4 Honest gaps
+
+- **The VPS was not touched in this session** and is not reachable from here; every statement above
+  about "the server" is the owner's report, not a measurement.
+- **`seed-demo` still has no automated test**, and the mock-mode E2E suite was **not** re-run this
+  session: it needs a `NEXT_PUBLIC_USE_MOCKS=true` dev server, and the one on :3100 is in live mode
+  for the demo. The login path it drives was instead verified in the stricter environment — the real
+  browser against the live API.
+- The pre-hydration window is much smaller in a production build than in `next dev`; it is closed
+  regardless, and the guard tests the server-rendered HTML rather than racing hydration.
