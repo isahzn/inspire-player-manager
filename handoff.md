@@ -5,7 +5,12 @@
 > in anything else — see §17. Everything else that is *built* is verified in §12–§16; the go-live
 > items in §5 and §16.6 are still open and are not affected by the deferral.
 >
-> **Updated:** 2026-10-15 (sixth session: **the login form can no longer put the password in the
+> **Updated:** 2026-10-15 (seventh session: **the live deployment was clicked through end to end** —
+> 22 routes, 562 controls, every form twice, a keyboard-only pass and a separate coach pass; the money
+> path works on the box, and three real defects came out of it (a sign-out that does not sign out,
+> a `/settings` that throws, and date filters that 422), all three now **fixed in source and verified
+> locally but NOT deployed** — [the audit](docs/engineering/handoffs/2026-10-15-vps-ui-click-audit.md))
+> · previously 2026-10-15 (sixth session: **the login form can no longer put the password in the
 > URL** — the gap §14.2's first repair left — with a permanent guard,
 > `npm run verify:login-guard`; §15 · and **the VPS was redeployed from today's source and now has the
 > demo accounts** `huzzam` / `demo1` with password `12345`, 6 weekly rules and 99 sessions; §16) ·
@@ -33,10 +38,47 @@
 Everything below is measured, not assumed; each line points at the section that carries the evidence.
 The repo is committed at `3b94620` and the tree is clean apart from the deliberately-untracked receipts.
 
-**Nobody has ever clicked through this UI.** No session has driven every control in a real browser —
-the E2E suites cover the flows they were written for, not the whole surface, and the accessibility and
-real-device passes (M9) have never been run. Until that audit exists, "the buttons work" is an
-assumption. This is the single largest unknown left, and it needs no decision from anyone.
+**The UI has now been clicked through, on the live deployment — and it found three real defects.**
+The 2026-10-15 audit (22 routes, 562 visible controls, every form twice, a keyboard-only pass and a
+separate coach pass, all on `http://inspire-player.lk`) is
+[its own handoff](docs/engineering/handoffs/2026-10-15-vps-ui-click-audit.md). The money path itself
+**works end to end on the box** — a run created a player, a guardian with consent, sessions,
+attendance, an invoice, a proof-backed payment and an allocation, and the dashboard, the reports and
+the invoice all moved consistently — but three things are broken and two of them are serious:
+
+- **A1 — signing out does not sign you out.** `POST /auth/logout` → **500**, and the session stays
+  valid afterwards. Cause: `auth02Logout` passes `viewer.sessionId` (the *sha256 of the token*, a
+  `text` primary key) as `audit_logs.entity_id` (**`uuid`**), so Postgres raises `22P02`, the
+  enclosing transaction rolls back and the revoke never commits. **No test mentions logout at all** —
+  which is why 260 green tests never saw it. On a box with a 5-character password this is the
+  security item.
+- **A2 — `/settings` does not render.** The frontend reads `academyName` and
+  `jan_1 | fixed_date | today`; the contract and the API return `name` and
+  `jan_1_of_year | fixed_month_day | today`. `draft.academyName.trim()` throws, so the whole Settings
+  area is unreachable.
+- **A3 — any date filter on `/payments` breaks the list** with a 422: the frontend sends
+  `from=2026-10-01` where the contract requires `format: date-time`. The same request also drives the
+  duplicate-payment hint, which has therefore never worked.
+
+**All three are now fixed in the source and verified locally — and NONE of it is deployed.**
+`auth02Logout` audits the user instead of the session key; the frontend's SET-01 field names match the
+contract (the wrong ones came from the MSW **mock**, which is why mock-mode history never showed it);
+and a business date is widened to the academy-local day for the instant-typed filters on **both**
+`/payments` and `/audit` (`/sessions`, `/coach-attendance`, `/invoices` and `/billing/runs` genuinely
+take business dates and were left alone). Four new tests in
+`backend/tests/integration/auth-surface.test.ts` cover exactly what was missing. Verified locally in a
+browser against the real API: `/settings` renders with `name` = "Inspire Academy" and
+`ageRule = jan_1_of_year`, both date filters answer 200, and signing out now clears the cookie and
+leaves the old one answering **401 `SESSION_EXPIRED`**. `tsc` exit 0 · `eslint` **0 errors / 0
+warnings** · `next build` **compiled successfully** · backend `vitest run` **264/264, 28 files**
+(was 260/27) · frontend `verify:unit` 17/17 · `tests-minimums.json` raised to 264 in the same commit.
+**The box still runs the broken build**, so until someone rebuilds and restarts `ia_api` and `ia_web`,
+A1 is still live there — that redeploy is the owner's call (standing permission, §6).
+
+What is deliberately **not** closed by that audit: no timing measurement of any kind, nothing at
+mobile widths, no screen reader, and the void/reject/reverse paths were left unpressed by the
+brief's rules. The M9 halves (performance, accessibility with a real assistive technology, the
+real-device pass, a bug bash on anonymised data) are still owed.
 
 Then, needing the owner:
 
@@ -54,9 +96,11 @@ Then, needing the owner:
    OPEN-001/003/006/018/021/023/024/025, plus the contract questions the frontend raised for Claude
    (report shapes, `skipReason` vocabulary, `MessageJob.kind`).
 
-Then the deployment's own loose ends: **`demo1` has no age-group assignments** (the coach's session
-list is legitimately empty), **the box's checkout is stale and root-owned** (the running images came
-from a tarball), **six commits are unpushed**, and **the invite anomaly in §16.1 is unexplained**.
+Then the deployment's own loose ends: **the box's checkout is stale and root-owned** (the running
+images came from a tarball), **six commits are unpushed**, and **the invite anomaly in §16.1 is
+unexplained**. ~~`demo1` has no age-group assignments~~ — **done 2026-10-15**: the audit assigned the
+coach to Under-11 and Under-14 so the coach side is testable, and verified that the coach then sees
+only those two groups (and that every owner-only route and API refuses them).
 
 **WhatsApp is the one feature deliberately left** — deferred by the owner, recorded in §17, and not a
 statement that the rest is finished.
