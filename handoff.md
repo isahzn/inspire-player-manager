@@ -1107,11 +1107,24 @@ handoff should say so. Recorded exactly as instructed, with the boundary stated 
 
 - **Deferred, not cancelled:** M7 is still the only feature this system does not have. Nothing else is
   waiting on it, and no other module is a stub or a placeholder because of it.
+- **Spike S1 ran on 2026-10-15 and answered half of its brief** —
+  [the S1 handoff](docs/engineering/handoffs/2026-10-15-openwa-spike-s1.md). A gateway was built and
+  run **locally, unpaired** (`0.24.0`, `ENGINE_TYPE=baileys`) and driven through its own API, so
+  **O18, O21 and O22 are now measured rather than guessed**, and O5/O6's signature rule moved from
+  "docs" to "observed" (a secret-less subscription receives **no** signature header at all). Three
+  of those measurements **correct the architecture doc**: "session not working" is a **409**, a
+  malformed recipient *also* answers 409 (so 409 must never map to `INVALID_RECIPIENT`), and the
+  gateway's own throttle hit **429 on the 6th send** — far tighter than §6's ≤ 40/hour pacing.
+  **O19 (ack semantics) is untouched** and still blocks §9.4's "Delivered" label; the inbound half of
+  O20 is also still open. **No M7 code was written** — the §2 gate is not satisfied yet.
 - **What it still needs when the owner picks it up** (unchanged from §5 and the M7 note in
-  [PROJECT_STATUS](docs/engineering/PROJECT_STATUS.md)): a dedicated number, **spike S1 run first**
-  against the real gateway — never written against guessed OpenWA behaviour — and the gateway paired
-  on the VPS. The `MessagingService` port, the provider adapter, the queue and the mock provider are
-  already in place, so the work is the adapter's real behaviour plus pairing, not the architecture.
+  [PROJECT_STATUS](docs/engineering/PROJECT_STATUS.md)): a dedicated number, the gateway **paired on
+  the VPS** (never on a developer machine — pairing twice is what trips WhatsApp's passkey gate), and
+  then the four remaining S1 observations (one real send, one inbound reply, the unregistered-number
+  response, and a corrected retry probe). The `MessagingService` port, the queue and the mock provider
+  are already in place; **the real provider adapter deliberately does not exist yet** — the factory
+  throws for `MESSAGING_PROVIDER=openwa` rather than pretending to send, and it stays that way until
+  O19 is measured.
 - **Still true after the deferral:** the go-live items in §5 and §16.6 — DNS, TLS, real age groups and
   fees, a real password, off-host backups, the security review — and the unmeasured M9 pass. "No
   WhatsApp" is the *only* thing the owner has chosen to leave; the rest is not chosen, it is simply
