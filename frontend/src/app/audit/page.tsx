@@ -33,6 +33,7 @@ import {
   SelectField,
   TextField,
 } from "@/components/ui";
+import { withAcademyDayRange } from "@/lib/dates";
 
 const PAGE_SIZE = 25;
 
@@ -99,16 +100,21 @@ function AuditScreen() {
   const logsQuery = useQuery({
     queryKey: ["audit", { actorUserId, entityType, entityId, action, from, to, page }],
     queryFn: () =>
-      aud01ListAuditLogs({
-        actorUserId: actorUserId || undefined,
-        entityType: entityType.trim() || undefined,
-        entityId: entityId.trim() || undefined,
-        action: action.trim() || undefined,
-        from: from || undefined,
-        to: to || undefined,
-        page,
-        pageSize: PAGE_SIZE,
-      }),
+      // AUD-01 types `from`/`to` as instants, not business dates (audit.ts's own note at the top
+      // of the route says so, and the contract is `format: date-time`). Sent raw, a `YYYY-MM-DD`
+      // is a 422 — the same defect the 2026-10-15 UI audit found on `/payments` (A3).
+      aud01ListAuditLogs(
+        withAcademyDayRange({
+          actorUserId: actorUserId || undefined,
+          entityType: entityType.trim() || undefined,
+          entityId: entityId.trim() || undefined,
+          action: action.trim() || undefined,
+          from: from || undefined,
+          to: to || undefined,
+          page,
+          pageSize: PAGE_SIZE,
+        }),
+      ),
     placeholderData: (previous) => previous,
   });
 

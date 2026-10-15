@@ -251,10 +251,17 @@ export const auth01Login: Handler = async ({ ctx, body, req, reply }): Promise<H
 export const auth02Logout: Handler = async ({ ctx, viewer, reply }): Promise<HandlerResult> => {
   await withTransaction({ userId: viewer.userId, role: viewer.role }, async (client) => {
     await revokeSession(client, { sessionId: viewer.sessionId, reason: "logout" });
+    // `viewer.sessionId` is the session's primary key, which is `sha256(token)` — a text
+    // column — while `audit_logs.entity_id` is a `uuid`. Passing it directly made Postgres
+    // raise 22P02 inside this transaction, so the revoke rolled back and a sign-out left the
+    // session alive (found by the 2026-10-15 UI audit, §A1). The record therefore names the
+    // **user**, exactly as `auth.login` does, and keeps the session key in `after` where a
+    // text column cannot break the chain.
     await audit.record(client, { ...viewerAudit(viewer, ctx), }, {
       action: "auth.logout",
-      entityType: "session",
-      entityId: viewer.sessionId,
+      entityType: "user",
+      entityId: viewer.userId,
+      after: { result: "logout", sessionId: viewer.sessionId },
     });
   });
   reply.clearCookie(config.cookieName, { path: "/" });

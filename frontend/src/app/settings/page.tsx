@@ -185,8 +185,8 @@ function AcademyTab() {
   if (!draft) return <Card><ListSkeleton rows={3} /></Card>;
 
   const invalid =
-    draft.academyName.trim().length < 2 ||
-    (draft.ageReferenceRule === "fixed_date" && !/^\d{2}-\d{2}$/.test(draft.ageReferenceMonthDay ?? ""));
+    draft.name.trim().length < 2 ||
+    (draft.ageReferenceRule === "fixed_month_day" && !/^\d{2}-\d{2}$/.test(draft.ageReferenceMonthDay ?? ""));
 
   // A merge of a Partial draft — never a computed-key spread, so the state stays
   // typed without a cast.
@@ -205,9 +205,9 @@ function AcademyTab() {
             id="academy-name"
             label="Academy name"
             required
-            value={draft.academyName}
-            error={errors.academyName}
-            onChange={(e) => patch({ academyName: e.target.value })}
+            value={draft.name}
+            error={errors.name}
+            onChange={(e) => patch({ name: e.target.value })}
           />
           <TextField
             id="academy-phone"
@@ -250,7 +250,7 @@ function AcademyTab() {
             <p className="mb-1 text-[14px] font-semibold text-slate-800">Preview on a PDF</p>
             <div className="rounded-xl border border-slate-300 bg-slate-50 p-4 text-[13px] text-slate-700">
               <p className="font-heading text-[15px] font-bold text-navy-900">
-                {draft.academyName || "Academy name"}
+                {draft.name || "Academy name"}
               </p>
               <p className="text-[12px] text-slate-500">
                 Invoice INV-2026-0001 · {draft.phone || "phone"} · {draft.email || "email"}
@@ -276,12 +276,12 @@ function AcademyTab() {
             error={errors.ageReferenceRule}
             onChange={(e) => patch({ ageReferenceRule: e.target.value as AcademyDraft["ageReferenceRule"] })}
           >
-            <option value="jan_1">On 1 January each year</option>
-            <option value="fixed_date">On a fixed date each year</option>
+            <option value="jan_1_of_year">On 1 January each year</option>
+            <option value="fixed_month_day">On a fixed date each year</option>
             <option value="today">On today&apos;s date</option>
           </SelectField>
 
-          {draft.ageReferenceRule === "fixed_date" ? (
+          {draft.ageReferenceRule === "fixed_month_day" ? (
             <TextField
               id="academy-age-rule-date"
               label="Fixed date (MM-DD)"
@@ -293,13 +293,13 @@ function AcademyTab() {
           ) : null}
 
           <InlineAlert tone="info" title="What this changes">
-            {draft.ageReferenceRule === "jan_1" ? (
+            {draft.ageReferenceRule === "jan_1_of_year" ? (
               <>
                 Every player&apos;s age is taken on 1 January of the current year, so a whole group
                 moves up together once a year. Example: a player born 2015-03-14 is{" "}
                 <strong>11</strong> for the whole of 2026, and the Under-12 suggestion uses that age.
               </>
-            ) : draft.ageReferenceRule === "fixed_date" ? (
+            ) : draft.ageReferenceRule === "fixed_month_day" ? (
               <>
                 Ages are taken on {(draft.ageReferenceMonthDay || "MM-DD").replace("-", "/")} each
                 year. Example: with 09-01, a player born 2015-03-14 turns <strong>11</strong> on that
@@ -840,7 +840,7 @@ function BrandingTab() {
   const [localPreview, setLocalPreview] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
-  const academyName = academyQuery.data?.academyName ?? me?.academy.name ?? "Inspire Academy";
+  const academyName = academyQuery.data?.name ?? me?.academy.name ?? "Inspire Academy";
 
   // The picked file is previewed from the browser's own object URL, so the owner
   // sees their real file before anything is uploaded. The url is created where

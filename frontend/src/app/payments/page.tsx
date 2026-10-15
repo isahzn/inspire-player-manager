@@ -49,7 +49,7 @@ import {
   proofLabel,
   sortFindings,
 } from "@/lib/billing";
-import { academyTime } from "@/lib/dates";
+import { academyTime, withAcademyDayRange } from "@/lib/dates";
 import { copyText } from "@/lib/download";
 
 const PAGE_SIZE = 25;
@@ -181,7 +181,10 @@ function PaymentsList() {
 
   const paymentsQuery = useQuery({
     queryKey: ["payments", params],
-    queryFn: () => pay01ListPayments(params),
+    // PAY-01 types `from`/`to` as instants (`format: date-time`), so the picker's business
+    // dates are widened to the academy-local day on the way out. Sent raw, they are a 422
+    // that replaces the whole list with "Something went wrong" — 2026-10-15 audit, defect A3.
+    queryFn: () => pay01ListPayments(withAcademyDayRange(params)),
     placeholderData: (previous) => previous,
     // The queue owns its own request; the list would otherwise fetch a page of
     // rows nothing on the screen shows.

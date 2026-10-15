@@ -1664,7 +1664,7 @@ export function billingSettings(): BillingSettings {
 export function academyPaymentSettings(): AcademyPaymentSettings {
   const s = getDb().settings;
   return {
-    academyName: s.academyName,
+    name: s.academyName,
     paymentInstructions: s.paymentInstructions,
     beneficiaryAccounts: s.beneficiaryAccounts,
   };

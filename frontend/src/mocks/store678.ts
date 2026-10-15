@@ -170,15 +170,20 @@ function seed(): AdminStore {
     proofCheck: false,
   };
 
+  // Field names follow the contract (`openapi.yaml` `AcademySettings`): `name`, and the
+  // `jan_1_of_year | fixed_month_day | today` enum. The mock used to invent `academyName`
+  // and `jan_1`, and because mock mode was the only mode the frontend had ever been built
+  // in, that spelling is what the real screens were written against — which is what made
+  // `/settings` throw on the live deployment (2026-10-15 audit, defect A2).
   const academy: AcademySettings = {
-    academyName: "Inspire Academy",
+    name: "Inspire Academy",
     address: "12 Galle Road, Dehiwala",
     phone: "+94112223344",
     email: "hello@inspireacademy.lk",
     paymentInstructions:
       "Bank transfer to Inspire Academy · Bank of Ceylon · 0071234567 (Colombo 04). Put the invoice number in the reference. A proof is evidence only — your payment counts once we confirm it.",
     timezone: "Asia/Colombo",
-    ageReferenceRule: "jan_1",
+    ageReferenceRule: "jan_1_of_year",
     coachCanSeeGuardianPhone: true,
     attendanceCoachEditWindowHours: 24,
     coachCheckinOpensMinutesBefore: 30,

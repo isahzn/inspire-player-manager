@@ -582,7 +582,8 @@ export interface BillingSettings {
 
 /** SET-01 subset the billing screens must be honest about. */
 export interface AcademyPaymentSettings {
-  academyName: string;
+  /** SET-01's own field name — the API returns `name`, not `academyName` (2026-10-15 audit §A2). */
+  name: string;
   paymentInstructions: string;
   /** Academy accounts a bank receipt's beneficiary must match (PAYMENT_VERIFICATION §3). */
   beneficiaryAccounts: { name: string; accountMasked: string }[];
@@ -809,14 +810,21 @@ export interface ReportResult {
 
 /** SET-01 full response (the money screens read a subset of these). */
 export interface AcademySettings {
-  academyName: string;
+  /**
+   * SET-01's field names, taken from the contract rather than from the mock:
+   * `openapi.yaml` `AcademySettings` requires `name` and the enum
+   * `jan_1_of_year | fixed_month_day | today`. The earlier `academyName` /
+   * `jan_1` / `fixed_date` spelling made `/settings` throw on load — the
+   * 2026-10-15 UI audit, defect A2.
+   */
+  name: string;
   address?: string;
   phone?: string;
   email?: string;
   paymentInstructions: string;
   timezone: string;
-  ageReferenceRule: "jan_1" | "fixed_date" | "today";
-  /** "MM-DD", required when `ageReferenceRule` is `fixed_date`. */
+  ageReferenceRule: "jan_1_of_year" | "fixed_month_day" | "today";
+  /** "MM-DD", required when `ageReferenceRule` is `fixed_month_day`. */
   ageReferenceMonthDay?: string;
   coachCanSeeGuardianPhone: boolean;
   attendanceCoachEditWindowHours: number;

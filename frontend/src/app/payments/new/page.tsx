@@ -48,8 +48,10 @@ import { PROOF_EVIDENCE_NOTE } from "@/lib/billing";
 import {
   academyLocalToInstant,
   addDaysISO,
+  endOfAcademyDay,
   formatDateStr,
   formatInstant,
+  startOfAcademyDay,
   todayISO,
 } from "@/lib/dates";
 import { formatMoneyMinor, moneyMinorToEditText, parseMoneyInput } from "@/lib/money";
@@ -188,7 +190,14 @@ function RecordPayment() {
   // Non-blocking duplicate hint: same payer, same amount, same day (BILLING_ENGINE §9).
   const duplicateQuery = useQuery({
     queryKey: ["payments", "duplicate-check", { guardianId: payerGuardianId, date: receivedAt }],
-    queryFn: () => pay01ListPayments({ guardianId: payerGuardianId, from: receivedAt, to: receivedAt, pageSize: 25 }),
+    // PAY-01 wants instants, not the picker's business date (2026-10-15 audit, defect A3).
+    queryFn: () =>
+      pay01ListPayments({
+        guardianId: payerGuardianId,
+        from: startOfAcademyDay(receivedAt) || undefined,
+        to: endOfAcademyDay(receivedAt) || undefined,
+        pageSize: 25,
+      }),
     enabled: Boolean(payerGuardianId) && amountMinor > 0 && Boolean(receivedAt),
   });
   const duplicates = (duplicateQuery.data?.data ?? []).filter(

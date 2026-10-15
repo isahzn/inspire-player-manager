@@ -159,6 +159,43 @@ export function academyLocalToInstant(dateISO: string, time: string): string {
   return new Date(guess - offset * 60_000).toISOString();
 }
 
+/**
+ * The first instant of an academy-local business date.
+ *
+ * The contract types several list filters (`/payments`, `/audit-logs`) as **instants**
+ * (`Instant`, `format: date-time`), while the screens offer a date picker. Sending the
+ * date itself is a 422 (`Invalid ISO datetime`), which is what the 2026-10-15 UI audit
+ * found on `/payments` (defect A3) — so a business date is widened to the day it names.
+ * Returns "" for a malformed date, which callers treat as "no filter".
+ */
+export function startOfAcademyDay(dateISO: string): string {
+  return academyLocalToInstant(dateISO, "00:00");
+}
+
+/** The last instant of an academy-local business date (23:59:59.999). "" when malformed. */
+export function endOfAcademyDay(dateISO: string): string {
+  const start = academyLocalToInstant(dateISO, "00:00");
+  if (!start) return "";
+  return new Date(Date.parse(start) + 86_400_000 - 1).toISOString();
+}
+
+/**
+ * Widens a list query's business dates to the academy-local instants the contract wants.
+ *
+ * PAY-01 and AUD-01 type `from`/`to` as instants (`format: date-time`), so a raw
+ * `YYYY-MM-DD` from a date picker is a 422 — that is what took the payments list down with
+ * "Something went wrong" (2026-10-15 audit, defect A3). This is a module-level helper
+ * rather than inline code so it can be applied **inside a query function**: the React
+ * Compiler's `preserve-manual-memoization` rule refuses to preserve a `useMemo` whose
+ * dependency is passed to a call in the component body.
+ */
+export function withAcademyDayRange<T extends { from?: string; to?: string }>(params: T): T {
+  const next: T = { ...params };
+  if (params.from) next.from = startOfAcademyDay(params.from) || undefined;
+  if (params.to) next.to = endOfAcademyDay(params.to) || undefined;
+  return next;
+}
+
 /** UTC instant → "16:00" in the academy timezone. */
 export function academyTime(value?: string | null, fallback = "—"): string {
   if (!value) return fallback;

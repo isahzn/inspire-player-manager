@@ -1,10 +1,10 @@
 {
   "_why": "The floor assert-test-report.mjs enforces. Raise it when tests are added, deliberately, in the same commit — a run that is short of this number did not run, which is the failure this project has already seen twice (a vitest file whose beforeAll threw is reported skipped, so an unreachable database produces a fast, green, empty run).",
-  "_updated": "2026-10-14",
-  "tests": 260,
+  "_updated": "2026-10-15",
+  "tests": 264,
   "files": {
     "tests/unit": 7,
     "tests/db": 4,
-    "tests/integration": 16
+    "tests/integration": 17
   }
 }

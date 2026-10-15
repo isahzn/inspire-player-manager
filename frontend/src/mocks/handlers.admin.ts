@@ -13,7 +13,7 @@
 //  · `GET /settings/academy` is served HERE and returns the FULL
 //    `AcademySettings`. The money screens read the same route through
 //    `set01GetAcademyPaymentSettings` (a subset type), so the response must keep
-//    `academyName`, `paymentInstructions` and `beneficiaryAccounts` sourced from
+//    `name`, `paymentInstructions` and `beneficiaryAccounts` sourced from
 //    `db.settings` — the row the billing slice and the AppShell already read.
 //  · `GET /settings/billing` and `GET /settings/payment-methods` stay with the
 //    billing slice; only the WRITES are added here.
@@ -32,7 +32,7 @@ import { actorFor, getAdmin, logAudit, saveAdmin, setLogo } from "./store678";
 // ---------------------------------------------------------------------------
 
 const ACADEMY_FIELDS: (keyof AcademySettings)[] = [
-  "academyName",
+  "name",
   "address",
   "phone",
   "email",
@@ -78,7 +78,7 @@ function fullAcademySettings(): AcademySettings {
   const s = getDb().settings;
   return {
     ...getAdmin().academy,
-    academyName: s.academyName,
+    name: s.academyName,
     paymentInstructions: s.paymentInstructions,
     beneficiaryAccounts: s.beneficiaryAccounts,
   };
@@ -280,21 +280,21 @@ export const adminHandlers = [
           details.push({ field: key, issue: "This setting cannot be changed" });
         }
       }
-      if (body.academyName !== undefined && body.academyName.trim().length < 2) {
-        details.push({ field: "academyName", issue: "Use 2–120 characters" });
+      if (body.name !== undefined && body.name.trim().length < 2) {
+        details.push({ field: "name", issue: "Use 2–120 characters" });
       }
       if (body.timezone !== undefined && body.timezone.trim().length === 0) {
         details.push({ field: "timezone", issue: "Choose a timezone" });
       }
       if (
         body.ageReferenceRule !== undefined &&
-        !["jan_1", "fixed_date", "today"].includes(body.ageReferenceRule)
+        !["jan_1_of_year", "fixed_month_day", "today"].includes(body.ageReferenceRule)
       ) {
         details.push({ field: "ageReferenceRule", issue: "Choose one of the three age rules" });
       }
       const rule = body.ageReferenceRule ?? before.ageReferenceRule;
       const monthDay = body.ageReferenceMonthDay ?? before.ageReferenceMonthDay;
-      if (rule === "fixed_date" && !monthDay) {
+      if (rule === "fixed_month_day" && !monthDay) {
         details.push({
           field: "ageReferenceMonthDay",
           issue: "A fixed-date age rule needs the month and day",
@@ -329,7 +329,7 @@ export const adminHandlers = [
       }
       // Keep the fields the money slice owns in step with the same edit, so an
       // invoice PDF and the settings screen can never disagree.
-      if (body.academyName !== undefined) db.settings.academyName = store.academy.academyName;
+      if (body.name !== undefined) db.settings.academyName = store.academy.name;
       if (body.paymentInstructions !== undefined) {
         db.settings.paymentInstructions = store.academy.paymentInstructions;
       }
