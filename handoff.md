@@ -28,6 +28,41 @@
 
 ---
 
+## 0. What's up right now — the fix list, in priority order
+
+Everything below is measured, not assumed; each line points at the section that carries the evidence.
+The repo is committed at `3b94620` and the tree is clean apart from the deliberately-untracked receipts.
+
+**Nobody has ever clicked through this UI.** No session has driven every control in a real browser —
+the E2E suites cover the flows they were written for, not the whole surface, and the accessibility and
+real-device passes (M9) have never been run. Until that audit exists, "the buttons work" is an
+assumption. This is the single largest unknown left, and it needs no decision from anyone.
+
+Then, needing the owner:
+
+1. **DNS + TLS.** `inspire-player.lk` still has no A record, the box is HTTP-only, `COOKIE_SECURE=false`,
+   and from the internet the app answers only when the request carries `Host: inspire-player.lk`
+   (§16.5). A hosts entry works today; everyone else needs the record.
+2. **A real password.** The deployment runs `huzzam`/`demo1` with `12345` — below the 12-character
+   policy, on a publicly reachable box, over plain HTTP (§16.6).
+3. **Real academy data.** The age groups and fees are placeholders from the demo seed
+   (Under-11/14/17 and demo amounts), and the academy's details and bank instructions are still
+   needed (§5).
+4. **Off-host backups and off-host payment proofs.** Both currently live on the same disk as the data
+   they protect (§5, §16.6), and no security review has been done.
+5. **Decisions:** CR-003 in writing (its surfaces are built while ADR-019 is still *Proposed*), and
+   OPEN-001/003/006/018/021/023/024/025, plus the contract questions the frontend raised for Claude
+   (report shapes, `skipReason` vocabulary, `MessageJob.kind`).
+
+Then the deployment's own loose ends: **`demo1` has no age-group assignments** (the coach's session
+list is legitimately empty), **the box's checkout is stale and root-owned** (the running images came
+from a tarball), **six commits are unpushed**, and **the invite anomaly in §16.1 is unexplained**.
+
+**WhatsApp is the one feature deliberately left** — deferred by the owner, recorded in §17, and not a
+statement that the rest is finished.
+
+---
+
 ## 1. Goal
 
 **Deploy the backend to the VPS by running the runbook that had never been run.** The previous
