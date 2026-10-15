@@ -455,3 +455,45 @@ docker compose -f docker-compose.prod.yml logs --since 5m api worker web | grep 
 ```
 
 Backup first (DEPLOYMENT §5 step 3) whenever the release includes a migration.
+
+### Two traps this path walks past, both met for real on 2026-10-15
+
+1. **Migrations are compared byte-for-byte, so line endings are load-bearing.** `migrate.ts` stores
+   `sha256` of each file's contents and refuses a file whose checksum changed after it was applied.
+   A tree cloned on Linux has LF; a tree **exported from a Windows checkout with
+   `core.autocrlf=true` has CRLF in every text file**, and the same migration then hashes differently:
+   `0001_platform.sql` is `06a8a9b7…` as LF and `5de75407…` as CRLF. The failure is loud and safe
+   (the deploy stops), but the fix is to build from LF sources, not to edit
+   `schema_migrations`. From a Windows machine:
+
+   ```bash
+   git -c core.autocrlf=false archive --format=tar.gz -o /tmp/src.tgz HEAD
+   ```
+
+2. **The image tags are whatever `.env.production` says**, not the `ghcr.io/…` defaults in the
+   compose file. On this box they are `ia-backend:prod` and `ia-frontend:prod`, so a rebuild must be
+   tagged that way or `up -d` will happily keep running the old image. Confirm the tag the *running*
+   containers use rather than assuming:
+
+   ```bash
+   docker inspect ia_api --format '{{.Config.Image}}'
+   ```
+
+**When the deploy user cannot read `.env.production` (mode 600, another owner) but is in the
+`docker` group**, compose can still be run as root without copying any secret out of that file — the
+socket and the deploy directory are mounted into a throwaway container and the host's own compose
+plugin is invoked inside it:
+
+```bash
+cd /opt/inspire/src/backend/deploy
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD":/deploy \
+  -v /usr/libexec/docker/cli-plugins/docker-compose:/usr/local/bin/docker-compose \
+  -w /deploy alpine:latest /usr/local/bin/docker-compose \
+  --profile localdb -f docker-compose.prod.yml --env-file .env.production up -d api worker web
+```
+
+`config --quiet` through the same wrapper validates the file before anything is recreated. This is a
+workaround for a permission boundary, not a second deploy path: the intended path is still
+`git pull` as the owner of the checkout.

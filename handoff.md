@@ -2,7 +2,9 @@
 
 > **Updated:** 2026-10-15 (sixth session: **the login form can no longer put the password in the
 > URL** — the gap §14.2's first repair left — with a permanent guard,
-> `npm run verify:login-guard`; §15) · previously 2026-10-14 (fifth session: **the frontend is out of
+> `npm run verify:login-guard`; §15 · and **the VPS was redeployed from today's source and now has the
+> demo accounts** `huzzam` / `demo1` with password `12345`, 6 weekly rules and 99 sessions; §16) ·
+> previously 2026-10-14 (fifth session: **the frontend is out of
 > mock mode and running against the real API**, with a demo seed (owner `huzzam`, coach `demo1`,
 > password `12345`) and the **recurring Tuesday/Thursday 16:00–17:30 training schedule** that
 > automates sessions — §14 has the frontend-to-production steps, and
@@ -843,6 +845,17 @@ purpose, because a guard nobody has watched fail is a guard nobody can trust.
 `useSyncExternalStore`'s subscribe function is a no-op: the store never changes, it is only being
 asked "is the client live?".
 
+**Scope, corrected while building the production image (§16.5) — the earlier framing was too wide.**
+The leak was reproduced against `next dev`, where the login form *is* in the initial HTML. The
+production build does **not** ship the form in its initial HTML at all: the deployed `/login`
+response is the app shell plus a `Loading…` Suspense fallback, with the form arriving only once the
+client component runs (measured on the built image — `grep` for `<form`, `<input` and `<button>`
+found 0 of each in 8,544 bytes). So in production there is no pre-hydration form to submit, and the
+guard's practical effect there is only that the button enables on the first client render. It closes
+the window in the server-rendered case (dev, and any future shell that does include the form), and it
+costs nothing in production. `verify:login-guard` asserts the *dev server's* server-rendered HTML and
+is expected to fail against a production build — do not point it at one.
+
 ### 15.3 "I changed the password in the env" — that variable is read by nothing
 
 Measured on this machine, now:
@@ -875,3 +888,127 @@ is whatever was last set through the app.
   browser against the live API.
 - The pre-hydration window is much smaller in a production build than in `next dev`; it is closed
   regardless, and the guard tests the server-rendered HTML rather than racing hydration.
+
+---
+
+## 16. This session — the VPS: demo accounts, a redeploy, and three things only the box could show
+
+**What was asked:** put the known demo accounts on the VPS as well as locally (`huzzam` / `demo1`,
+password `12345`); confirm whether a password can be changed *through* the VPS at all; confirm whether
+a newly created account comes with a password; and, after being shown the gap, **redeploy the VPS**.
+The owner chose the demo seed knowing it removes the other account, and chose to rebuild.
+
+### 16.0 How the box is reached (recorded so the next session does not re-derive it)
+
+- `ssh -i ~/.ssh/id_ed25519_deploy -p 10057 deploy@93.127.141.71` — the key's comment is
+  `deploy@inspire-vps`; the SSH host key is already in `known_hosts`. **This is not in the repo**, so
+  it is written down here: port **10057**, user **`deploy`**.
+- `deploy` is in the `docker` group (so Docker works) but has **no passwordless sudo**, and
+  `/opt/inspire/src` is owned by `administrator` — the checkout is **read-only for `deploy`**, and
+  `.env.production` (mode 600) cannot be read by it. Compose therefore has to run as root; the
+  socket-mount trick in [the runbook §16](docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md) does that
+  without copying a single secret.
+- Compose project `inspire`, volumes `inspire_ia_pgdata` / `_ia_files` / `_ia_backups` etc.; images
+  `ia-backend:prod` and `ia-frontend:prod` (**not** the `ghcr.io/…` defaults the compose file shows —
+  `.env.production` overrides them).
+- Before this session: all five containers healthy, up ~13 h, `ia_api` answering `{"status":"ok"}`.
+
+### 16.1 What the VPS actually held — and the state the owner's missing password was hiding
+
+`ia_prod` contained **one** account: `owner`, status **`invited`**, **no password hash**, never logged
+in, **0 sessions**, and `updated_at` equal to `created_at` (2026-10-14 15:35:14, the `create-owner`
+moment). `huzzam` and `demo1` **did not exist** there. So there was nothing to change and nothing to
+recover: the account had never been claimed, and `AUTH-04` (change password) cannot be used on it
+because it requires the current password.
+
+Two facts around it do not reconcile, and are reported as found rather than explained:
+
+- `user_invites` shows the owner's `invite` row **used at 17:07:55**, while the user row was never
+  touched. `auth05AcceptInvite` sets the password, the status and `used_at` in **one transaction**, so
+  a used invite with an untouched user should not be possible.
+- `audit_logs` records an **`auth.login` success at 16:06:27 for a role `coach` user
+  (`a4cb84e7-…`) that no longer exists**, and `docker logs ia_api` contains **zero** requests to
+  `accept-invite` for the life of this container. Both point at activity before the current container
+  existed (16:31:56) that left no complete trace. The owner had in fact run the demo seed on that box
+  at some point; what removed those rows afterwards is not visible from outside.
+
+**The plain-language answer to "I changed the password in the env":** nothing reads a password from
+any `.env`. `grep -rn DEV_OWNER backend/src backend/scripts backend/db backend/migrations` finds no
+reader at all, and no code reads *any* `*_PASSWORD` variable — so that edit could not have taken
+effect anywhere. (The VPS's own `.env.production` could not even be read as `deploy`, so its contents
+are not claimed here.)
+
+### 16.2 The redeploy — what was done, in order
+
+1. **Backup first, and verified:** `docker exec ia_db pg_dump -U postgres -d ia_prod -Fc` →
+   `/home/deploy/backups/predeploy-20261015T054728Z.dump`, 191 KB, **452 TOC entries read back with
+   `pg_restore --list`** — a dump nobody has listed is not a backup.
+2. **Source:** today's committed tree (`b40d4e5`) exported with
+   `git -c core.autocrlf=false archive` and unpacked to `~/ia-src` on the box. The first attempt was
+   built **without** that flag and is why 16.3 exists.
+3. **Images:** rebuilt in place — `ia-backend:prod` and `ia-frontend:prod` — from `~/ia-src`.
+4. **Migrations:** `migrate` through the root-container compose wrapper → **"migrations up to date
+   (17 applied)"**, exit 0. The VPS was already at `0017_owner_invariant_bootstrap.sql`, identical to
+   the repo, so no schema change was involved in this deploy.
+5. **Recreate:** `up -d api worker web`. `ia_db` and `ia_caddy` were **not** touched (`Up 13 hours`
+   before and after) — no database downtime. All three recreated containers came back **healthy**.
+6. **Seed:** `dist/scripts/seed-demo.js` → *owner `huzzam` (created), coach `demo1` (created),
+   password `12345`, users removed: 1, age groups: Under-11/14/17, schedules: 6 (Tue + Thu
+   16:00–17:30), sessions: 99 new rows*. The one removed user is the never-claimed `owner` row from
+   16.1, which the owner approved removing.
+
+### 16.3 The defect this deploy exposed — and it was in my own build, not the box
+
+The first `migrate` **failed**: *"0001_platform.sql changed after it was applied (checksum
+mismatch)"*. `migrate.ts` stores `sha256` of each migration and refuses a file whose bytes changed.
+The recorded hash was `06a8a9b7…`; the file **inside my image** hashed `5de75407…`. Cause: this
+Windows checkout has `core.autocrlf=true`, so `git archive` shipped **CRLF** (209 of them in that one
+file) while the database had been migrated from **LF**. Re-exported with conversion off, the file
+hashes `06a8a9b7…` again and `migrate` passes. The database's own history was **not** edited. Recorded
+in [the runbook §16](docs/engineering/VPS_DEPLOYMENT_RUNBOOK.md) so the next person does not lose an
+afternoon to it: migrations are byte-compared, so line endings are load-bearing.
+
+### 16.4 What the redeploy proves, measured through the deployed origin
+
+From outside the box, over Caddy (`Host: inspire-player.lk`, `Origin: http://inspire-player.lk`):
+
+| Check | Result |
+|---|---|
+| `GET /api/v1/health` · `/ready` | **200** `{"status":"ok"}` · **200** |
+| `POST /auth/login` `huzzam` / `12345` | **200**, role `owner`, 21 permissions |
+| `POST /auth/login` `demo1` / `12345` | **200**, role `coach`, 5 permissions |
+| `POST /auth/login` wrong password | **401** `INVALID_CREDENTIALS` |
+| `GET /training-schedules` (owner) | the 6 rules — Under-11, Tue, 16:00–17:30 |
+| `GET /schedules` (the screen) | **200** |
+| `docker ps` | `ia_api`, `ia_worker`, `ia_web` **healthy** on the new images; `ia_db`, `ia_caddy` untouched |
+| Caddy's running config | matches the Caddyfile on disk (started 16:51, file last edited 16:49) — checked because the deploy's first external request looked odd |
+
+### 16.5 Two things the owner should know, and one correction
+
+- **`demo1` has no age-group assignments on the VPS**, so the coach's `GET /sessions` correctly returns
+  **0** rows. Assigning the coach to groups (the `/coaches` screen, or `POST /coach-assignments`) is the
+  remaining step to make the coach's side of the demo show anything.
+- **The app is reachable from the internet only when the request carries the hostname.** From here,
+  `http://93.127.141.71/` returns a plain **404**, while the *same* address with `Host:
+  inspire-player.lk` returns the app (`Via: 1.1 Caddy`). On the box itself both hosts answer, and
+  Caddy's running config has no host matcher — so the split is at the hosting edge, not in the
+  Caddyfile. Practically: a hosts entry (`93.127.141.71 inspire-player.lk`) makes it browsable today,
+  and the A record is still what makes it browsable for everyone.
+- **Correction to §15:** the pre-hydration password leak is a `next dev` finding. The production build's
+  `/login` ships **no form at all** in its initial HTML (0 `<form>`, 0 `<input>`, 0 `<button>` in
+  8,544 bytes — only the shell and a `Loading…` fallback), so there is nothing there to submit before
+  hydration. The guard still closes the server-rendered case and is a no-op in production; it is not
+  evidence of a production leak, and it must not be pointed at a production build.
+
+### 16.6 Still open after this session
+
+- **The box's checkout is still at `51d90d0`** and `deploy` cannot move it (root-owned). The running
+  images came from a tarball of `b40d4e5`, so the next *runbook* deploy (`git pull` as
+  `administrator`) will need the owner — and the six unpushed commits are still unpushed.
+- **HTTP only, no TLS, and now a 5-character password on a publicly reachable box.** The seed prints
+  its own warning. Anyone who finds the host and sends the right `Host` header can sign in as the
+  owner. This is acceptable only while it is a demo nobody is pointed at.
+- **No off-host copy of the backups** (the dump above is on the same disk), and **no off-host copy of
+  the payment proofs** — unchanged from §5.
+- **The invite anomaly in 16.1 is unexplained.** It was not reproduced and should be looked at on a
+  copy of the database, not guessed at.
